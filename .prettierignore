@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.wrangler/
+package-lock.json
+_worker.bundle
+public/*.svg
+src/assets/
+# Preserve reviewed historical evidence and the existing compatibility suite byte-for-byte.
+docs/COMPATIBILITY_REPORT.md
+docs/SG-02B_REPORT.md
+tests/compatibility/

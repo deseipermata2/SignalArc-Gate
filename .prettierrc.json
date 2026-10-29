@@ -1,0 +1,8 @@
+{
+  "semi": false,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "overrides": [
+    { "files": "wrangler.jsonc", "options": { "trailingComma": "none" } }
+  ]
+}
