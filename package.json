@@ -9,19 +9,22 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:compatibility": "tsc -p tests/compatibility/tsconfig.json && node tests/compatibility/run.mjs",
-    "pages:dev": "wrangler pages dev dist --ip 127.0.0.1 --d1 SIGNALARC_DB",
+    "pages:dev": "node scripts/dev-local.mjs",
     "build:functions": "wrangler pages functions build --outdir .wrangler/functions-build",
     "test:foundation": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs",
     "test:d1": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs --d1-only",
     "test:ui": "node tests/foundation/run.mjs --ui-only",
-    "test": "npm run test:foundation && npm run test:compatibility",
+    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "db:migrate:local": "node scripts/migrate-local.mjs",
+    "test:sg03": "node tests/sg03/run.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "1.60.0",
     "@radix-ui/react-slot": "1.5.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "5.105.0",
     "@x402/core": "2.28.0",
     "@x402/evm": "2.28.0",
     "@x402/extensions": "2.28.0",
@@ -31,7 +34,9 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tailwind-merge": "3.7.0",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "viem": "2.57.13",
+    "wagmi": "3.7.9"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261028.1",

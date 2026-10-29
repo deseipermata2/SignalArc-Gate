@@ -1,20 +1,23 @@
 # SignalArc Gate
 
-A Base-native x402 API monetization gateway for developers, targeting USDC on **Base Mainnet (chain 8453)**. The current SG-02 foundation includes a live service-health screen, native Cloudflare Pages Functions, isolated local D1/configuration tests, and the existing x402/CDP compatibility proof. Payment execution is not enabled.
+A Base-native x402 API monetization gateway targeting USDC on **Base Mainnet (8453)**. SG-00, SG-01 and SG-02 are owner-approved complete. **SG-03 is IN PROGRESS and awaiting review.** Wallet/SIWE sessions and merchant resource configuration are implemented locally; upstream fetching and payment execution are not enabled.
 
 ## Local setup
 
-Use Node.js **22.22.2** (the CI version) and the locked npm dependencies:
+Use Node.js **22.22.2** and the locked npm dependencies:
 
 ```sh
 npm ci
 npm run build
+npm run db:migrate:local
 npm run pages:dev
 ```
 
-Open the loopback URL printed by Wrangler. `pages:dev` serves `dist` and native Functions, adds the local `SIGNALARC_DB` D1 binding, and uses `BASE_CHAIN_ID=8453` from `wrangler.jsonc`. No Cloudflare login, remote database, production database ID, or CDP credentials are needed. Append `-- --port 8788` or another free port if needed. Never stop unrelated processes to free a port.
+Open the loopback URL printed by Wrangler. `/` retains the health foundation screen; **`/manage`** connects an injected wallet, signs in with Ethereum, and manages persisted resources. Only Base Mainnet is configured. No blockchain RPC or transaction is required for EOA sign-in. Contract-signature authentication is explicitly unsupported.
 
-For frontend-only editing, `npm run dev` starts Vite. Its standalone server does not provide `/api/health`; the screen reports that failure. Rebuild and use Pages dev for the complete local application. There is no proxy to a live payment service.
+`pages:dev` chooses a free loopback port and sets the exact server `APP_ORIGIN` and explicit local HTTP mode. You may supply `-- --port 8788` with a free port; occupied ports fail without terminating another process. D1 uses `--d1 SIGNALARC_DB`, with no production UUID or account credentials. The migration command applies only local SQL through native D1, checks migration digests, and retains local app state under `.wrangler/state`. It has no remote mode. Tests use separate temporary database directories and remove their own state.
+
+For frontend-only editing, `npm run dev` starts Vite, which does not supply the native API. Rebuild and use Pages dev for the full app. No proxy to a live facilitator or untrusted upstream is configured.
 
 ## Verification
 
@@ -28,21 +31,22 @@ npm run build:functions
 npm audit
 ```
 
-`npm test` runs the new foundation checks followed by the unchanged 14-check compatibility suite. The foundation runner tests actual local D1/Pages execution and the browser UI, including loading, real health success, HTTP failure, retry, malformed response and mobile layout. Browser tests block non-local requests. Test-only error responses are explicitly browser fixtures, not payment activity. On a minimal Linux system, browser libraries may first require `npx playwright install --with-deps chromium --only-shell`.
+On minimal Linux systems, Chromium libraries may require `npx playwright install --with-deps chromium --only-shell`.
 
-Useful focused commands:
+- `npm run test:foundation`: the unchanged SG-02 D1/read-write/configuration and browser checks.
+- `npm run test:d1`: focused SG-02 local D1 smoke checks.
+- `npm run test:compatibility`: the unchanged x402/CDP workerd proof.
+- `npm run test:sg03`: actual migrations, SIWE signature verification, nonce races, cookies/sessions, CSRF, ownership, validation and CRUD in local Pages/D1, plus desktop/mobile browser integration.
+- `npm run format`: format active files while preserving historical reports and compatibility evidence.
 
-- `npm run test:d1`: local SQL, configuration validation and isolation only; no browser launch.
-- `npm run test:ui`: Pages health and Chromium UI checks against built `dist`.
-- `npm run test:compatibility`: existing isolated x402/CDP workerd proof.
-- `npm run format`: format active project files. Historical reports and compatibility evidence are intentionally excluded.
-
-D1 and payment probe routes are generated exclusively in temporary test projects, not in production `functions/`. Foundation tests use their own local D1 state and parameterized SELECT statements. They create no application schema or records. Temporary state is removed; browser screenshots are saved under ignored `.wrangler/`.
+`npm test` includes all three suites, so the existing CI quality job includes SG-03 automatically. Its separate audit job intentionally remains failing for the unresolved Zod advisory. The new browser test uses an **explicitly simulated injected provider** backed by real ECDSA signatures from ephemeral local test keys kept only in Node memory. API/backend successes are not mocked. No test key is printed, persisted or sent to frontend JavaScript. External browser/worker fetch is blocked in test fixtures.
 
 ## Configuration and boundaries
 
-See [environment configuration](docs/ENVIRONMENT.md) for binding/variable names and server-side validation. See [SG-02 report](docs/SG-02_REPORT.md) for evidence and limitations. Historical [compatibility](docs/COMPATIBILITY_REPORT.md) and [packaging/security](docs/SG-02B_REPORT.md) reports are preserved.
+See [environment and local D1 configuration](docs/ENVIRONMENT.md), [SG-03 evidence](docs/SG-03_REPORT.md) and the preserved [SG-02 report](docs/SG-02_REPORT.md). Historical [compatibility](docs/COMPATIBILITY_REPORT.md) and [packaging/security](docs/SG-02B_REPORT.md) reports remain unchanged.
 
-The known Zod advisory **GHSA-mrhx-c7xc-m3w5 remains unresolved**. `npm audit` currently fails; input bounds in local fixtures do not fix the dependency. The CI audit job deliberately reports this failure. Do not interpret successful local tests as a production security audit or real payment settlement proof.
+Production authentication requires an owner-supplied exact HTTPS `APP_ORIGIN` and a real D1 binding. Neither is provisioned or deployed here. Session cookies are HttpOnly/SameSite=Strict and Secure with `__Host-` names over HTTPS. Only explicit loopback development permits non-Secure local cookies. Session tokens are hashed in D1 and never returned to JavaScript or stored in localStorage.
 
-SG-02 awaits owner review. No roadmap phase is automatically completed. The owner performs all Git mutations and publishing; local CI configuration performs no deployment.
+Resource registration validates and stores configuration; it never contacts the upstream. DNS/rebinding checks and safe response delivery remain deferred. No public payment parsing, proxy, settlement, analytics dashboard or fabricated payment activity is introduced.
+
+**GHSA-mrhx-c7xc-m3w5 remains unresolved.** `npm audit` currently fails. No forced fix or incompatible override is used, and the application is not claimed to be security-audited or production-ready. All Git mutations, publishing and deployments remain the owner's responsibility. No roadmap checkbox is automatically changed.

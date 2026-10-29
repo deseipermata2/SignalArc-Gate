@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -21,7 +21,9 @@ type HealthState =
   | { state: 'success'; response: HealthResponse }
   | { state: 'error'; message: string }
 
-function App() {
+const Workspace = lazy(() => import('./sg03/Workspace'))
+
+function FoundationApp() {
   const [attempt, setAttempt] = useState(0)
   const [health, setHealth] = useState<HealthState>({ state: 'loading' })
 
@@ -86,7 +88,7 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-7 sm:px-10">
+      <header className="mx-auto flex flex-wrap max-w-6xl items-center justify-between gap-4 px-6 py-7 sm:px-10">
         <a
           href="/"
           className="flex items-center gap-3 font-semibold tracking-tight"
@@ -99,6 +101,9 @@ function App() {
             SG
           </span>
           SignalArc Gate
+        </a>
+        <a href="/manage" className="text-sm font-medium text-primary">
+          Manage APIs
         </a>
         <span className="rounded-full border border-border bg-card px-3 py-1 text-xs font-medium">
           Base Mainnet
@@ -218,4 +223,18 @@ function App() {
   )
 }
 
-export default App
+export default function App() {
+  return window.location.pathname === '/manage' ? (
+    <Suspense
+      fallback={
+        <p role="status" className="p-8">
+          Loading workspace…
+        </p>
+      }
+    >
+      <Workspace />
+    </Suspense>
+  ) : (
+    <FoundationApp />
+  )
+}
