@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { getConnection } from 'wagmi/actions'
 import {
   WagmiProvider,
@@ -17,6 +17,7 @@ import {
   useMutation,
 } from '@tanstack/react-query'
 import { walletConfig } from './wallet'
+import Activity from '../sg06/Activity'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -43,11 +44,15 @@ async function api<T>(
   path: string,
   method = 'GET',
   data?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch(path, {
     method,
     credentials: 'same-origin',
     cache: 'no-store',
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+      : AbortSignal.timeout(10000),
     headers:
       method === 'GET'
         ? {}
@@ -56,10 +61,13 @@ async function api<T>(
   })
   const body = await response.json()
   if (!response.ok)
-    throw new Error(
-      typeof body.error === 'string'
-        ? body.error
-        : `Request failed (HTTP ${response.status})`,
+    throw Object.assign(
+      new Error(
+        typeof body.error === 'string'
+          ? body.error
+          : `Request failed (HTTP ${response.status})`,
+      ),
+      { status: response.status },
     )
   return body as T
 }
@@ -79,20 +87,54 @@ function Manager() {
   const disconnect = useDisconnect()
   const signer = useSignMessage()
   const switcher = useSwitchChain()
+  const [identityBlocked, setIdentityBlocked] = useState(false)
   const [message, setMessage] = useState('')
   const [editing, setEditing] = useState<Resource | null | undefined>(undefined)
   const session = useQuery({
     queryKey: ['session'],
-    queryFn: () => api<Session>('/api/auth/session'),
+    queryFn: ({ signal }) =>
+      api<Session>('/api/auth/session', 'GET', undefined, signal),
   })
-  const merchant = session.data?.authenticated
-    ? session.data.merchant
-    : undefined
+  const merchant =
+    !identityBlocked && session.data?.authenticated
+      ? session.data.merchant
+      : undefined
   const list = useQuery({
     queryKey: ['resources', merchant?.id],
-    queryFn: () => api<{ resources: Resource[] }>('/api/resources'),
+    queryFn: ({ signal }) =>
+      api<{ resources: Resource[] }>(
+        '/api/resources',
+        'GET',
+        undefined,
+        signal,
+      ),
     enabled: !!merchant,
   })
+  const clearMerchantData = useCallback(async () => {
+    await Promise.all([
+      client.cancelQueries({ queryKey: ['resources'] }),
+      client.cancelQueries({ queryKey: ['merchant-report'] }),
+    ])
+    client.removeQueries({ queryKey: ['resources'] })
+    client.removeQueries({ queryKey: ['merchant-report'] })
+  }, [client])
+  const sessionEnded = useCallback(() => {
+    void client.cancelQueries({ queryKey: ['session'] })
+    client.setQueryData(['session'], { authenticated: false })
+    void clearMerchantData()
+  }, [client, clearMerchantData])
+  useEffect(() => {
+    if (list.error && 'status' in list.error && list.error.status === 401)
+      sessionEnded()
+  }, [list.error, sessionEnded])
+  useEffect(() => {
+    if (!session.data?.authenticated) return
+    const timer = setTimeout(
+      sessionEnded,
+      Math.max(0, session.data.expiresAt - Date.now()),
+    )
+    return () => clearTimeout(timer)
+  }, [session.data, sessionEnded])
   const wrongNetwork = connection.isConnected && connection.chainId !== 8453
   const sessionMismatch =
     merchant &&
@@ -132,14 +174,26 @@ function Manager() {
     },
     onSuccess: async () => {
       setMessage('')
+      await client.cancelQueries({ queryKey: ['session'] })
+      await clearMerchantData()
+      setEditing(undefined)
+      setIdentityBlocked(false)
       await client.invalidateQueries({ queryKey: ['session'] })
     },
   })
   const logout = useMutation({
-    mutationFn: async () => {
-      await api('/api/auth/logout', 'POST')
+    onMutate: async () => {
       setEditing(undefined)
-      client.removeQueries({ queryKey: ['resources'] })
+      setIdentityBlocked(true)
+      await client.cancelQueries({ queryKey: ['session'] })
+      await clearMerchantData()
+    },
+    mutationFn: () => api('/api/auth/logout', 'POST'),
+    onSuccess: () => {
+      client.setQueryData(['session'], { authenticated: false })
+    },
+    onSettled: async () => {
+      setIdentityBlocked(false)
       await client.invalidateQueries({ queryKey: ['session'] })
     },
   })
@@ -332,7 +386,7 @@ function Manager() {
           >
             {errors.map((error, i) => (
               <p className="break-words" key={i}>
-                {error}
+                {String(error).slice(0, 256)}
               </p>
             ))}
           </div>
@@ -378,66 +432,77 @@ function Manager() {
               </div>
             )}
             <div className="grid gap-4 md:grid-cols-2">
-              {list.data?.resources.map((resource) => (
-                <Card key={resource.id}>
-                  <CardHeader>
-                    <CardTitle className="break-words">
-                      {resource.name}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <p className="break-all">{resource.upstreamUrl}</p>
-                    <dl className="space-y-2">
-                      <div>
-                        <dt className="text-xs text-muted-foreground">
-                          Resource ID
-                        </dt>
-                        <dd className="break-all font-mono text-xs">
-                          {resource.id}
-                        </dd>
+              {!list.error &&
+                list.data?.resources.map((resource) => (
+                  <Card key={resource.id}>
+                    <CardHeader>
+                      <CardTitle className="break-words">
+                        {resource.name}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm">
+                      <p className="break-all">{resource.upstreamUrl}</p>
+                      <dl className="space-y-2">
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Resource ID
+                          </dt>
+                          <dd className="break-all font-mono text-xs">
+                            {resource.id}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Price
+                          </dt>
+                          <dd>{atomicToUsdc(resource.priceAtomic)} USDC</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Payout address
+                          </dt>
+                          <dd className="break-all font-mono text-xs">
+                            {resource.payoutAddress}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">
+                            Status
+                          </dt>
+                          <dd>{resource.enabled ? 'Enabled' : 'Disabled'}</dd>
+                        </div>
+                      </dl>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          aria-label={`Edit ${resource.name}`}
+                          variant="outline"
+                          disabled={edit.isPending}
+                          onClick={() => edit.mutate(resource.id)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          aria-label={`Disable ${resource.name}`}
+                          variant="outline"
+                          disabled={!resource.enabled || disable.isPending}
+                          onClick={() => disable.mutate(resource.id)}
+                        >
+                          Disable
+                        </Button>
                       </div>
-                      <div>
-                        <dt className="text-xs text-muted-foreground">Price</dt>
-                        <dd>{atomicToUsdc(resource.priceAtomic)} USDC</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-muted-foreground">
-                          Payout address
-                        </dt>
-                        <dd className="break-all font-mono text-xs">
-                          {resource.payoutAddress}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-muted-foreground">
-                          Status
-                        </dt>
-                        <dd>{resource.enabled ? 'Enabled' : 'Disabled'}</dd>
-                      </div>
-                    </dl>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        aria-label={`Edit ${resource.name}`}
-                        variant="outline"
-                        disabled={edit.isPending}
-                        onClick={() => edit.mutate(resource.id)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        aria-label={`Disable ${resource.name}`}
-                        variant="outline"
-                        disabled={!resource.enabled || disable.isPending}
-                        onClick={() => disable.mutate(resource.id)}
-                      >
-                        Disable
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))}
             </div>
           </section>
+        )}
+        {merchant && (
+          <Activity
+            key={merchant.id}
+            merchantId={merchant.id}
+            resources={list.data?.resources ?? []}
+            onUnauthorized={sessionEnded}
+          />
         )}
       </main>
     </div>

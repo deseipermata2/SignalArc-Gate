@@ -1,12 +1,19 @@
 import { currentSession, logout, nonce, verify } from './auth'
 import { apiConfig, apiError, HttpError, requireCsrf } from './http'
 import { resources } from './resources'
+import { reporting } from '../sg06/reporting'
 
 export async function handleApi(
   request: Request,
   env: Record<string, unknown>,
 ) {
   try {
+    let headerBytes = 0
+    request.headers.forEach((value, key) => {
+      headerBytes += new TextEncoder().encode(key + value).length
+    })
+    if (headerBytes > 16384 || (request.method === 'GET' && request.body))
+      throw new HttpError(413, 'Request headers or body exceed policy')
     if (request.url.length > 2048)
       throw new HttpError(414, 'Request URL exceeds limit')
     if (Number(request.headers.get('Content-Length') ?? '0') > 16384)
@@ -19,7 +26,9 @@ export async function handleApi(
         '/api/auth/session',
         '/api/auth/logout',
         '/api/resources',
-      ].includes(path) || /^\/api\/resources\/[^/]+$/.test(path)
+      ].includes(path) ||
+      /^\/api\/reporting\/(attempts|receipts|summary)$/.test(path) ||
+      /^\/api\/resources\/[^/]+$/.test(path)
     if (!known) throw new HttpError(404, 'API route not found')
     const config = apiConfig(request, env)
     if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(request.method))
@@ -33,6 +42,8 @@ export async function handleApi(
       return await currentSession(request, config)
     if (path === '/api/auth/logout' && request.method === 'POST')
       return await logout(request, config)
+    if (path.startsWith('/api/reporting/'))
+      return await reporting(request, config, path.split('/')[3])
     if (path === '/api/resources' || path.startsWith('/api/resources/'))
       return await resources(request, config, path.split('/')[3])
     throw new HttpError(405, 'Method not allowed')

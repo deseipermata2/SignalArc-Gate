@@ -64,7 +64,11 @@ export function requireCsrf(request: Request, config: ApiConfig) {
 export function json(value: unknown, status = 200, cookies: string[] = []) {
   const headers = new Headers({
     'Cache-Control': 'no-store',
+    Vary: 'Cookie',
     'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
     'Content-Type': 'application/json',
   })
   for (const cookie of cookies) headers.append('Set-Cookie', cookie)

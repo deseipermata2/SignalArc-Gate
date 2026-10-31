@@ -44,7 +44,7 @@ export function createLocalGateway(services: LocalServices) {
     try {
       const receipt = await store.receipt(a.id)
       if (!receipt) throw new GatewayError(503, 'settlement_record_unavailable')
-      const value = await protectedJson(s, upstream)
+      const value = await protectedJson(s, upstream, clock)
       const final = await unchanged(a)
       if (!(await store.advance(a.id, 'fulfilling', 'fulfilled', null, final)))
         throw new GatewayError(409, 'resource_configuration_changed')

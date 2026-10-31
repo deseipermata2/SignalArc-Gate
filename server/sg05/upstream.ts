@@ -1,14 +1,20 @@
 import { httpsUpstream } from '../../shared/resources'
 import { boundedResponse, deadline, GatewayError } from './bounds'
 import type { Snapshot } from './registry'
+import { clockTime, type TrustedClock } from './clock'
 /** No default fetch: a separately reviewed connection-safe transport is mandatory. */
 export type JsonTransport = (
   url: string,
   init: RequestInit,
 ) => Promise<Response>
-export async function protectedJson(s: Snapshot, transport: JsonTransport) {
+export async function protectedJson(
+  s: Snapshot,
+  transport: JsonTransport,
+  clock: TrustedClock,
+) {
   const url = httpsUpstream(s.resource.upstreamUrl)
-  return deadline(async (signal) => {
+  const started = await clockTime(clock)
+  const value = await deadline(async (signal) => {
     const response = await transport(url, {
       method: 'GET',
       redirect: 'manual',
@@ -21,4 +27,8 @@ export async function protectedJson(s: Snapshot, transport: JsonTransport) {
     }
     return boundedResponse(response, s.resource.responseConfig.maxBytes, signal)
   })
+  // Timer scheduling alone is not proof of elapsed time in workerd. Never release a late body.
+  if ((await clockTime(clock)) - started >= 1000)
+    throw new GatewayError(504, 'transport_timeout')
+  return value
 }

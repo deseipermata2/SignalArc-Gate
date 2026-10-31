@@ -493,6 +493,7 @@ try {
   runtime = await localRuntime({ statePath: state, includeApp: true, fixture })
   assert.deepEqual((await runtime.control('migrate')).applied, [
     '0002_sg05.sql',
+    '0003_sg06_reporting_indexes.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   assert.equal(

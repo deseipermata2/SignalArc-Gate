@@ -71,9 +71,12 @@ export async function localRuntime({
       `export { onRequest } from ${JSON.stringify(join(root, 'functions/api/[[path]].ts'))}`,
     )
   if (fixture) {
-    await mkdir(join(temp, 'functions/sg05'), { recursive: true })
+    const prefix = fixture.prefix ?? 'sg05'
+    if (!/^[a-z0-9-]+$/.test(prefix))
+      throw new Error('Invalid local fixture prefix')
+    await mkdir(join(temp, 'functions', prefix), { recursive: true })
     await writeFile(
-      join(temp, 'functions/sg05/[[path]].ts'),
+      join(temp, 'functions', prefix, '[[path]].ts'),
       `export { onRequest } from ${JSON.stringify(fixture.module)}`,
     )
   }
