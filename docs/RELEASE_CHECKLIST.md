@@ -1,28 +1,28 @@
 # Release checklist and non-executing SG-07 approval packet
 
-**Verdict: BLOCKED for public payments or production launch.** This is a planning/review artifact, not permission to begin SG-07. SG-06 remains IN PROGRESS until owner/ChatGPT approval. A passing local test or a database provenance flag cannot convert a blocker into PASS.
+**Verdict: BLOCKED for public payments or production launch.** This is a planning/review artifact, not permission to launch. SG-00 through SG-06 are owner-approved complete. SG-07 readiness/remediation is IN PROGRESS; launch is not authorized. A passing local test or a database provenance flag cannot convert a blocker into PASS.
 
-No deployment, secret provisioning, contract transaction, remote migration, paid API, DNS change or Mainnet smoke test is executed by this checklist. Exact local evidence and dependency findings belong in [SG-06_REPORT.md](SG-06_REPORT.md); the prior [SG-05 plan](SG-05_REPORT.md) remains historical evidence.
+No deployment, secret provisioning, contract transaction, remote migration, paid API, DNS change or Mainnet smoke test is executed by this checklist. Current local evidence and dependency findings belong in [SG-07_READINESS_REPORT.md](SG-07_READINESS_REPORT.md); [SG-06_REPORT.md](SG-06_REPORT.md) is historical evidence; the prior [SG-05 plan](SG-05_REPORT.md) remains historical evidence.
 
 ## Mandatory launch gates
 
-| Gate                             | Current evidence / missing requirement                                                                                                                                   | Status        |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
-| Owner phase/release approval     | SG-06 source and evidence await review; no SG-07 authorization                                                                                                           | BLOCKED       |
-| Dependency security              | Partial compatible remediation does not eliminate CDP/SVM Zod 3 or tooling findings; fresh audit remains failing                                                         | BLOCKED       |
-| Immutable contract/compiler      | Local tests only. Solidity 0.8.28 uses legacy codegen and disabled Yul optimization; current patched compiler validation and independent contract review remain required | BLOCKED       |
-| Registry deployment/verification | No deployed canonical registry address or explorer/code-verification evidence supplied                                                                                   | BLOCKED       |
-| Registry observation / D1 sync   | Approved address/code, original/current owner, confirmed block/finality/reorg policy, commitment/version and D1 binding admission are unimplemented                      | BLOCKED       |
-| Facilitator authentication       | Official helper bundles and empty-credential guard runs; actual CDP JWT, credentials, supported permissions, billing and Mainnet settlement remain unverified            | BLOCKED       |
-| Reconciliation                   | Local simulator ledger only; no authoritative production lookup/admission or operator recovery service                                                                   | BLOCKED       |
-| Upstream connection security     | URL checks and redirect rejection are insufficient for DNS rebinding/actual connection safety. No production outbound transport exists                                   | BLOCKED       |
-| Time/authorization expiry        | Local fixtures use a trusted monotonic clock capability. Production clock behavior and bounded streaming deadlines need proof                                            | BLOCKED       |
-| TLS/origin/wallet acceptance     | Actual deployed HTTPS, real injected-wallet variants, origin policy and cookie behavior have no production evidence                                                      | BLOCKED       |
-| Payment intent / delivery policy | EIP-3009 does not sign an HTTP URL/version; stolen bearer-header and consistency-window policy need review. Paid-but-unfulfilled handling/refunds require owner policy   | BLOCKED       |
-| Abuse and capacity               | No production-wide authenticated read/concurrency/storage/ingress limiter or capacity/cost measurement. Platform quotas are not security controls                        | BLOCKED       |
-| Remote D1 and migrations         | Local SQL/ledger only; no real account binding, backup/restore or production migration execution                                                                         | BLOCKED       |
-| Production evidence/metrics      | Self-labelled confirmations are quarantined. Verified Mainnet metrics remain unavailable until trustworthy evidence admission exists                                     | BLOCKED       |
-| Public route exposure            | Normal Functions excludes SG-05 gateway/fixtures/payment SDKs; this boundary must remain until every required gate is approved                                           | KEEP DISABLED |
+| Gate                             | Current evidence / missing requirement                                                                                                                                                            | Status        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| Owner phase/release approval     | SG-07 local readiness evidence awaits review; no launch authorization                                                                                                                             | BLOCKED       |
+| Dependency security              | Partial compatible remediation does not eliminate CDP/SVM Zod 3 or tooling findings; fresh audit remains failing                                                                                  | BLOCKED       |
+| Immutable contract/compiler      | Local tests and SG-07 ABI comparison only. Solidity 0.8.28 uses legacy codegen and disabled Yul optimization; current patched compiler validation and independent contract review remain required | BLOCKED       |
+| Registry deployment/verification | No deployed canonical registry address or explorer/code-verification evidence supplied                                                                                                            | BLOCKED       |
+| Registry observation / D1 sync   | Read-only code-hash/finalized hash adapter tested locally; actual deployment provenance, RPC trust and D1 evidence admission remain missing                                                       | BLOCKED       |
+| Facilitator authentication       | Official helper bundles and empty-credential guard runs; actual CDP JWT, credentials, supported permissions, billing and Mainnet settlement remain unverified                                     | BLOCKED       |
+| Reconciliation                   | Local simulator ledger only; no authoritative production lookup/admission or operator recovery service                                                                                            | BLOCKED       |
+| Upstream connection security     | URL checks and redirect rejection are insufficient for DNS rebinding/actual connection safety. No production outbound transport exists                                                            | BLOCKED       |
+| Time/authorization expiry        | Local fixtures use a trusted monotonic clock capability. Production clock behavior and bounded streaming deadlines need proof                                                                     | BLOCKED       |
+| TLS/origin/wallet acceptance     | Actual deployed HTTPS, real injected-wallet variants, origin policy and cookie behavior have no production evidence                                                                               | BLOCKED       |
+| Payment intent / delivery policy | EIP-3009 does not sign an HTTP URL/version; stolen bearer-header and consistency-window policy need review. Paid-but-unfulfilled handling/refunds require owner policy                            | BLOCKED       |
+| Abuse and capacity               | No production-wide authenticated read/concurrency/storage/ingress limiter or capacity/cost measurement. Platform quotas are not security controls                                                 | BLOCKED       |
+| Remote D1 and migrations         | Local SQL/ledger only; no real account binding, backup/restore or production migration execution                                                                                                  | BLOCKED       |
+| Production evidence/metrics      | Self-labelled confirmations are quarantined. Verified Mainnet metrics remain unavailable until trustworthy evidence admission exists                                                              | BLOCKED       |
+| Public route exposure            | Normal Functions excludes SG-05 gateway/fixtures/payment SDKs; this boundary must remain until every required gate is approved                                                                    | KEEP DISABLED |
 
 ## Intended contract deployment process — planning only
 
@@ -68,7 +68,7 @@ Existing implemented names, without secret values:
 | `APP_ENV`                              | Only explicit loopback local HTTP uses `local`; never enable public insecure cookies       |
 | `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET` | Future approved server secrets only, never VITE/public variables                           |
 
-No production knobs for registry synchronization, receipt admission, clock, reconciliation or safe upstream transport exist yet. Design/review those capabilities rather than inventing environment values. `SG02*`, `SG05_LOCAL_ONLY`, `SG06_LOCAL_ONLY`, fixture Pages URLs and `MOCK_ORIGIN` must not enter production bindings or routes.
+No production knobs for registry synchronization, receipt admission, clock, reconciliation or safe upstream transport exist yet. SG-07 adds server-injected registry policy/RPC and facilitator boundary modules, not environment activation or production evidence admission. Design/review the remaining capabilities rather than inventing environment values. `SG02*`, `SG05_LOCAL_ONLY`, `SG06_LOCAL_ONLY`, `SG07_LOCAL_ONLY`, fixture Pages URLs and `MOCK_ORIGIN` must not enter production bindings or routes.
 
 Before any remote migration: owner approves actual account/database, backup/restore test, migration digests/order, compatibility window and rollback/data-retention strategy. The local migration ledger is not evidence of provisioned production Wrangler/D1 identities. An index-only SG-06 migration does not authorize remote operations. Never rewrite applied migration history or delete payment records as rollback.
 
@@ -95,4 +95,4 @@ On uncertainty, mismatch, reorg or delivery failure: close routing, retain evide
 
 ## Review exit
 
-SG-06 can be reviewed as a **local-only** candidate while release remains blocked. Owner/ChatGPT must approve phase completion explicitly. No item above becomes PASS because CI is green. Do not start SG-07, deploy, broadcast, fund a wallet, provision credentials, change DNS or perform Git mutations from this document.
+SG-07 can be reviewed as a **local-only readiness** candidate while production release remains blocked. Owner/ChatGPT must approve launch actions separately and phase completion explicitly. No item becomes PASS because CI is green. Do not deploy, broadcast, fund a wallet, provision credentials, change DNS, mutate Git or start SG-08 from this document. See the current [SG-07 gate evidence](SG-07_READINESS_REPORT.md) and [non-executing launch runbook](SG-07_LAUNCH_RUNBOOK.md).

@@ -2,7 +2,7 @@
 
 A Base-native x402 API monetization gateway for **Base Mainnet, chain 8453**, using native USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
 
-SG-00 through SG-05 are owner-approved complete. **SG-06 is IN PROGRESS. Public payment execution and production release remain BLOCKED.** Local gateway tests simulate settlement; they do not prove a Mainnet payment.
+SG-00 through SG-06 are owner-approved complete. **SG-07 readiness/remediation is IN PROGRESS. Public payment execution and production release remain BLOCKED.** Local gateway tests simulate settlement; they do not prove a Mainnet payment.
 
 ## What works locally
 
@@ -37,6 +37,8 @@ Pages dev chooses a free port and supplies the exact `APP_ORIGIN`, explicit loca
 - [API and agent quickstart](docs/API_QUICKSTART.md)
 - [Release blockers and non-executing launch approval packet](docs/RELEASE_CHECKLIST.md)
 - [SG-06 implementation and QA evidence](docs/SG-06_REPORT.md)
+- [SG-07 local readiness and security gates](docs/SG-07_READINESS_REPORT.md)
+- [Non-executing launch runbook](docs/SG-07_LAUNCH_RUNBOOK.md)
 - Historical [SG-03](docs/SG-03_REPORT.md), [SG-04](docs/SG-04_REPORT.md), [SG-05](docs/SG-05_REPORT.md), [compatibility](docs/COMPATIBILITY_REPORT.md) and [CDP packaging](docs/SG-02B_REPORT.md) evidence
 
 Historical reports retain their original findings and review status; the owner's later approvals govern the current phase baseline.
@@ -53,7 +55,7 @@ npm run build:functions
 npm audit
 ```
 
-On minimal Linux installations, Chromium may need system libraries installed by the owner. Individual suites: `test:foundation`, `test:compatibility`, `test:sg03`, `test:sg05`, `test:sg06`. `test:d1` remains the focused SG-02 read/write probe. Automated wallet providers and payment settlements are explicitly local fixtures; signatures and native Pages/D1 execution are real local tests. No live CDP credentials, funded wallets or blockchain services are required.
+On minimal Linux installations, Chromium may need system libraries installed by the owner. Individual suites: `test:foundation`, `test:compatibility`, `test:sg03`, `test:sg05`, `test:sg06`, `test:sg07`. The SG-07 ABI check also requires the existing pinned Foundry/compiler; it performs no deployment. `test:d1` remains the focused SG-02 read/write probe. Automated wallet providers and payment settlements are explicitly local fixtures; signatures and native Pages/D1 execution are real local tests. No live CDP credentials, funded wallets or blockchain services are required.
 
 From `contracts/`, run `forge fmt --check`, `forge build`, `forge test -vvv`, and `forge test --gas-report`. Foundry is pinned to Solidity 0.8.28 and offline mode locally. The CI contract job permits a verified compiler download on a fresh runner; it never deploys or broadcasts.
 
