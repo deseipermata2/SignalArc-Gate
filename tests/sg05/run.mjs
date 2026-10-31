@@ -494,6 +494,8 @@ try {
   assert.deepEqual((await runtime.control('migrate')).applied, [
     '0002_sg05.sql',
     '0003_sg06_reporting_indexes.sql',
+    '0004_sg07_registry_review.sql',
+    '0005_sg07_persistent_quarantine.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   assert.equal(
@@ -931,6 +933,34 @@ try {
     assert.equal((await attempt(n)).phase, 'failed')
     pass('disable during facilitator verification aborts before settlement')
   }
+  reset()
+  {
+    const n = await issue(await seed()),
+      p = await signed(n),
+      settledBefore = count('/settle')
+    onVerify = () => control('binding', { id: n.resource, mode: 'unconfirmed' })
+    await submit(n, p, 503)
+    assert.equal(count('/settle'), settledBefore)
+    await noPayment(n)
+    assert.equal((await attempt(n)).phase, 'failed')
+    pass(
+      'registry invalidation after challenge and during verification blocks settlement and content',
+    )
+  }
+  reset()
+  {
+    const n = await issue(await seed()),
+      p = await signed(n)
+    onUpstream = () =>
+      control('binding', { id: n.resource, mode: 'unconfirmed' })
+    await submit(n, p, 503)
+    assert.equal((await receipts(n)).length, 1)
+    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+    pass(
+      'registry invalidation before content release preserves prior simulated settlement evidence and rejects delivery',
+    )
+  }
+
   reset()
   {
     const n = await issue(await seed()),

@@ -12,7 +12,7 @@ No deployment, secret provisioning, contract transaction, remote migration, paid
 | Dependency security              | Partial compatible remediation does not eliminate CDP/SVM Zod 3 or tooling findings; fresh audit remains failing                                                                                  | BLOCKED       |
 | Immutable contract/compiler      | Local tests and SG-07 ABI comparison only. Solidity 0.8.28 uses legacy codegen and disabled Yul optimization; current patched compiler validation and independent contract review remain required | BLOCKED       |
 | Registry deployment/verification | No deployed canonical registry address or explorer/code-verification evidence supplied                                                                                                            | BLOCKED       |
-| Registry observation / D1 sync   | Read-only code-hash/finalized hash adapter tested locally; actual deployment provenance, RPC trust and D1 evidence admission remain missing                                                       | BLOCKED       |
+| Registry observation / D1 sync   | Read-only adapter plus append-only untrusted review/CAS/quarantine tested locally; approved deployment/RPC authority and production confirmation remain blocked                                   | BLOCKED       |
 | Facilitator authentication       | Official helper bundles and empty-credential guard runs; actual CDP JWT, credentials, supported permissions, billing and Mainnet settlement remain unverified                                     | BLOCKED       |
 | Reconciliation                   | Local simulator ledger only; no authoritative production lookup/admission or operator recovery service                                                                                            | BLOCKED       |
 | Upstream connection security     | URL checks and redirect rejection are insufficient for DNS rebinding/actual connection safety. No production outbound transport exists                                                            | BLOCKED       |
@@ -96,3 +96,15 @@ On uncertainty, mismatch, reorg or delivery failure: close routing, retain evide
 ## Review exit
 
 SG-07 can be reviewed as a **local-only readiness** candidate while production release remains blocked. Owner/ChatGPT must approve launch actions separately and phase completion explicitly. No item becomes PASS because CI is green. Do not deploy, broadcast, fund a wallet, provision credentials, change DNS, mutate Git or start SG-08 from this document. See the current [SG-07 gate evidence](SG-07_READINESS_REPORT.md) and [non-executing launch runbook](SG-07_LAUNCH_RUNBOOK.md).
+
+## Registry admission continuation — still blocked for production
+
+See [SG-07_REGISTRY_ADMISSION_REPORT.md](SG-07_REGISTRY_ADMISSION_REPORT.md). Local controls now retain provenance/history, reject replay and conflicting/raced observations, invalidate old payment snapshots and block forged confirmation labels. Migration 0004 adds review watermarks and an immutable journal, quarantines legacy claims and prohibits new `onchain_confirmed` writes. No local mock can be promoted into Mainnet evidence.
+
+Before any production admission, owner/ChatGPT must review the migration/quarantine and retention/storage implications, actual deployment/code approval, trusted provider/finality/checkpoint authority, conflict resolution and deliberate replacement of the confirmation prohibition. Current observations are **review only**, never launch evidence. No runtime flag or public endpoint authorizes promotion. Fresh audits remain **5 high/12 moderate**, production-only **5 high**. The non-executing launch runbook and all other mandatory release gates remain in force; SG-07 is IN PROGRESS.
+
+## Persistent quarantine enforcement
+
+Migration 0005 fixes the delete/reinsert bypass in migration 0004's row-local sticky flag. Immutable conflict history now gates every binding incarnation for the same server-issued resource UUID. Historical conflicts restore/retain source unconfirmed and flag 1, independent of owner, configuration or registry changes. Normal merchant requests and repeated observations cannot clear it; there is no resolution endpoint. Review the [correction evidence](SG-07_REGISTRY_ADMISSION_REPORT.md#persistent-quarantine-correction--migration-0005) before any future migration approval. Migrations 0001–0004 remain unchanged.
+
+Production resolution still requires a separately designed/reviewed trusted authority retaining all old evidence. A successful local correction or migration does not satisfy real deployment/provider/finality/settlement gates. Current audits still fail (5 high/12 moderate, production-only 5 high). SG-07 is IN PROGRESS; Mainnet/public payments remain BLOCKED and all non-executing runbook approval boundaries remain mandatory.
