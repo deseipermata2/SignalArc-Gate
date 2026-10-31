@@ -13,13 +13,14 @@ import {
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createHash } from 'node:crypto'
+import { migrationStatements } from './sql-statements.mjs'
 
 const root = resolve(import.meta.dirname, '..')
-async function port() {
+async function port(requested = 0) {
   const server = createServer()
   await new Promise((done, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', done)
+    server.listen(requested, '127.0.0.1', done)
   })
   const value = server.address().port
   await new Promise((done) => server.close(done))
@@ -30,26 +31,29 @@ export async function localRuntime({
   statePath,
   includeApp = false,
   controls = false,
+  fixture,
+  migrationNames,
+  listenPort,
 } = {}) {
   await mkdir(join(root, '.wrangler'), { recursive: true })
   const temp = await mkdtemp(join(root, '.wrangler/sg03-'))
   const migrations = []
   for (const name of (await readdir(join(root, 'migrations')))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
+    .filter(
+      (name) =>
+        /^\d+.*\.sql$/.test(name) &&
+        (!migrationNames || migrationNames.includes(name)),
+    )
     .sort()) {
     const sql = await readFile(join(root, 'migrations', name), 'utf8')
-    // The reviewed migration files use no triggers or semicolons inside literals.
-    const statements = sql
-      .split(';')
-      .map((sql) => sql.trim())
-      .filter(Boolean)
+    const statements = migrationStatements(sql)
     migrations.push({
       name,
       digest: createHash('sha256').update(sql).digest('hex'),
       statements,
     })
   }
-  const serverPort = await port(),
+  const serverPort = await port(listenPort ?? 0),
     inspectorPort = await port()
   const origin = `http://127.0.0.1:${serverPort}`
   const config = JSON.parse(
@@ -66,6 +70,13 @@ export async function localRuntime({
       join(temp, 'functions/api/[[path]].ts'),
       `export { onRequest } from ${JSON.stringify(join(root, 'functions/api/[[path]].ts'))}`,
     )
+  if (fixture) {
+    await mkdir(join(temp, 'functions/sg05'), { recursive: true })
+    await writeFile(
+      join(temp, 'functions/sg05/[[path]].ts'),
+      `export { onRequest } from ${JSON.stringify(fixture.module)}`,
+    )
+  }
   await writeFile(
     join(temp, 'wrangler.jsonc'),
     JSON.stringify({
@@ -81,7 +92,7 @@ export async function localRuntime({
     `
 const migrations = ${JSON.stringify(migrations)}
 import { apiConfig, cookie } from ${JSON.stringify(join(root, 'server/sg03/http.ts'))}
-globalThis.fetch = async () => { throw new Error('SG-03 local runtime blocks network egress') }
+${fixture ? '' : "globalThis.fetch = async () => { throw new Error('SG-03 local runtime blocks network egress') }"}
 export async function onRequest({ request, env }) {
   if (new URL(request.url).origin !== env.APP_ORIGIN || env.APP_ENV !== 'local' || request.method !== 'POST' || request.headers.get('Origin') !== env.APP_ORIGIN || request.headers.get('X-Local-Only') !== '1') return new Response('Local operation disabled', {status:403})
   const db = env.SIGNALARC_DB
@@ -164,6 +175,10 @@ export async function onRequest({ request, env }) {
       'APP_ENV=local',
       '--binding',
       `APP_ORIGIN=${origin}`,
+      ...Object.entries(fixture?.bindings ?? {}).flatMap(([key, value]) => [
+        '--binding',
+        `${key}=${value}`,
+      ]),
     ],
     {
       cwd: temp,
@@ -180,9 +195,9 @@ export async function onRequest({ request, env }) {
   child.stderr.on('data', (data) => {
     logs += data
   })
-  async function close() {
-    if (child.exitCode === null) {
-      process.kill(-child.pid, 'SIGTERM')
+  async function close(signal = 'SIGTERM') {
+    if (child.exitCode === null && child.signalCode === null) {
+      process.kill(-child.pid, signal)
       await Promise.race([
         new Promise((done) => child.once('exit', done)),
         delay(3000),

@@ -14,11 +14,12 @@
     "test:foundation": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs",
     "test:d1": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs --d1-only",
     "test:ui": "node tests/foundation/run.mjs --ui-only",
-    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03",
+    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03 && npm run test:sg05",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:migrate:local": "node scripts/migrate-local.mjs",
-    "test:sg03": "node tests/sg03/run.mjs"
+    "test:sg03": "node tests/sg03/run.mjs",
+    "test:sg05": "tsc -p tests/sg05/tsconfig.json && node tests/sg05/run.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "1.60.0",

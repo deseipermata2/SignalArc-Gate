@@ -90,7 +90,7 @@ const alice = new Client(),
   bob = new Client()
 try {
   assert.deepEqual(await runtime.control('migrate'), {
-    applied: ['0001_sg03.sql'],
+    applied: ['0001_sg03.sql', '0002_sg05.sql'],
     localOnly: true,
   })
   assert.deepEqual(await runtime.control('migrate'), {
