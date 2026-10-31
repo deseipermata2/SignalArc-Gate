@@ -41,3 +41,9 @@ secrets/
 *.njsproj
 *.sln
 *.sw?
+
+# Foundry local compiler artifacts, fuzz corpus and gas snapshots
+/contracts/out/
+/contracts/cache/
+/contracts/broadcast/
+/contracts/.gas-snapshot

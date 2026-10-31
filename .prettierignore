@@ -12,3 +12,8 @@ tests/compatibility/
 
 # SG-02 is owner-approved historical evidence.
 docs/SG-02_REPORT.md
+
+# Solidity uses forge fmt; generated Foundry artifacts are not source.
+contracts/out/
+contracts/cache/
+contracts/broadcast/
