@@ -17,23 +17,28 @@ import {
   validSettlement,
 } from './protocol'
 import { PaymentStore, type Attempt } from './store'
-import { protectedJson, type JsonTransport } from './upstream'
+import { protectedJson, type UpstreamAccess } from './upstream'
 export interface LocalServices {
   db: D1Database
   origin: string
   facilitatorOrigin: string
   registry: RegistryReader
-  upstream: JsonTransport
+  upstream: UpstreamAccess
   clock: TrustedClock
 }
 /** Deliberately not imported by production Functions. Success is only a labeled local simulation. */
 export function createLocalGateway(services: LocalServices) {
   const { db, origin, facilitatorOrigin, registry, upstream, clock } = services
   const store = new PaymentStore(db, clock)
+  async function eligibleSnapshot(id: string) {
+    return deadline(async () => {
+      const current = await snapshot(db, id, registry, clock)
+      await upstream.assertEligible(current)
+      return current
+    })
+  }
   async function unchanged(a: Attempt) {
-    const current = await deadline(() =>
-      snapshot(db, a.resource_id, registry, clock),
-    )
+    const current = await eligibleSnapshot(a.resource_id)
     if (current.hash !== a.snapshot_hash)
       throw new GatewayError(409, 'resource_configuration_changed')
     return current
@@ -137,7 +142,7 @@ export function createLocalGateway(services: LocalServices) {
       if (!attemptId) {
         if (header || ticket)
           throw new GatewayError(400, 'server_challenge_required')
-        const s = await deadline(() => snapshot(db, resource, registry, clock))
+        const s = await eligibleSnapshot(resource)
         const { server } = localProtocol(facilitatorOrigin)
         const required = await deadline(() => requirements(server, s))
         const id = crypto.randomUUID(),

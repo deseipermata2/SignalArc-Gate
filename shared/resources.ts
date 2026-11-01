@@ -52,6 +52,13 @@ export function httpsUpstream(value: unknown) {
     hasControl(value)
   )
     throw new ValidationError('A valid HTTPS upstream URL is required')
+  // Require an unambiguous ASCII authority; callers may use canonical A-labels for IDNs.
+  // URL parsing alone would normalize encoded/Unicode hosts and empty/zero-padded ports.
+  const authority = value.slice('https://'.length).split(/[/?#]/)[0]
+  if (!/^[a-zA-Z0-9.-]+(?::443)?$/.test(authority))
+    throw new ValidationError(
+      'HTTPS authority must use an ASCII hostname and optional port 443',
+    )
   let url: URL
   try {
     url = new URL(value)

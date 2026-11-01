@@ -1,3 +1,4 @@
+import { createLocalUpstreamAccess } from '../../server/sg07/upstream'
 import { createLocalGateway } from '../../server/sg05/gateway'
 import {
   boundedJson,
@@ -184,6 +185,15 @@ async function control(request: Request, env: Env) {
         now,
       )
       .run()
+    await db
+      .prepare(
+        'CREATE TABLE IF NOT EXISTS sg05_upstream_policy (resourceId TEXT PRIMARY KEY, merchantId TEXT NOT NULL, url TEXT NOT NULL)',
+      )
+      .run()
+    await db
+      .prepare('INSERT INTO sg05_upstream_policy VALUES (?,?,?)')
+      .bind(id, m!.id, resourceUrl)
+      .run()
     const onchain = resourceId(owner, id),
       config = commitment(onchain, resourceUrl, 4096, salt)
     await db
@@ -318,6 +328,13 @@ async function control(request: Request, env: Env) {
       )
       .run()
     return reply(200, { changed: true })
+  }
+  if (body.action === 'denyUpstream') {
+    await db
+      .prepare('DELETE FROM sg05_upstream_policy WHERE resourceId=?')
+      .bind(String(body.id))
+      .run()
+    return reply(200, { revoked: true })
   }
   if (body.action === 'binding') {
     if (body.mode === 'delete')
@@ -492,7 +509,16 @@ export async function onRequest({
         if (!row) throw new GatewayError(503, 'registry_unavailable')
         return boundedJson(row.state) as RegistryState
       },
-      upstream: (_url, init) => fetch(`${env.MOCK_ORIGIN}/upstream`, init),
+      upstream: createLocalUpstreamAccess(
+        async (resource, merchant) => {
+          return env.SIGNALARC_DB.prepare(
+            'SELECT * FROM sg05_upstream_policy WHERE resourceId=? AND merchantId=?',
+          )
+            .bind(resource, merchant)
+            .first()
+        },
+        (_url, init) => fetch(`${env.MOCK_ORIGIN}/upstream`, init),
+      ),
     })
     return await gateway(request)
   } catch (error) {

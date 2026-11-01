@@ -294,6 +294,20 @@ const mock = createServer(async (req, res) => {
         })
         return res.end()
       }
+      if (scenario.upstream === 'cache-poison') {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public,max-age=86400',
+          'Set-Cookie': 'local_upstream_marker=1',
+          'X-Upstream-Private': 'LOCAL_TEST_ONLY',
+        })
+        return res.end(
+          JSON.stringify({
+            localSimulationOnly: true,
+            message: 'LOCAL fixture',
+          }),
+        )
+      }
       if (scenario.upstream === 'content-type') {
         res.writeHead(200, { 'Content-Type': 'text/html' })
         return res.end('<p>LOCAL TEST</p>')
@@ -988,6 +1002,102 @@ try {
     assert.equal((await attempt(n)).phase, 'fulfillment_failed')
     pass(
       'final D1 revision gate prevents delivery when configuration changes during upstream execution',
+    )
+  }
+  reset()
+  {
+    const id = await seed(),
+      before = await inspect(),
+      s = count('/settle'),
+      v = count('/verify'),
+      u = count('/upstream'),
+      supported = count('/supported')
+    await control('denyUpstream', { id })
+    const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
+    assert.equal(response.status, 503)
+    assert.equal((await response.json()).error, 'upstream_not_eligible')
+    assert.equal((await inspect()).attempts.length, before.attempts.length)
+    assert.equal(count('/settle'), s)
+    assert.equal(count('/verify'), v)
+    assert.equal(count('/upstream'), u)
+    assert.equal(count('/supported'), supported)
+    pass(
+      'known-ineligible upstream creates no payable challenge, D1 attempt, facilitator request or charge',
+    )
+  }
+  reset()
+  {
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle'),
+      v = count('/verify')
+    await control('denyUpstream', { id: n.resource })
+    await submit(n, p, 503)
+    assert.equal(count('/verify'), v)
+    assert.equal(count('/settle'), s)
+    await noPayment(n)
+    pass(
+      'eligibility revoked after challenge is rejected before facilitator verification or settlement',
+    )
+  }
+  reset()
+  {
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    onVerify = () => control('denyUpstream', { id: n.resource })
+    await submit(n, p, 503)
+    assert.equal(count('/settle'), s)
+    await noPayment(n)
+    assert.equal((await attempt(n)).phase, 'failed')
+    pass(
+      'eligibility revoked during verification is rechecked before settlement; no receipt is fabricated',
+    )
+  }
+  reset()
+  {
+    mode.upstream = 'cache-poison'
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    onUpstream = async () => {
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal((await attempt(n)).phase, 'fulfilling')
+    }
+    const result = await submit(n, p, 200, {
+      headers: {
+        'PAYMENT-SIGNATURE': p.header,
+        Authorization: 'Bearer LOCAL_TEST_ONLY',
+        Cookie: 'local_buyer_marker=1',
+        'PAYMENT-REQUIRED': 'LOCAL_TEST_ONLY',
+      },
+    })
+    assert.equal(result.r.headers.get('set-cookie'), null)
+    assert.equal(result.r.headers.get('x-upstream-private'), null)
+    assert.equal(
+      result.r.headers.get('cache-control'),
+      'private, no-store, max-age=0',
+    )
+    await submit(n, p, 409)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'content is requested only after persisted settlement; buyer headers and upstream cookies/cache headers cannot cross the boundary',
+    )
+  }
+  reset()
+  {
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    onUpstream = () => control('denyUpstream', { id: n.resource })
+    await submit(n, p, 503)
+    assert.equal((await receipts(n)).length, 1)
+    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+    assert.equal((await attempt(n)).status, 'settled')
+    await submit(n, p, 409)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'post-settlement eligibility failure retains settled receipt/status and denies content without another charge',
     )
   }
   for (const upstream of [

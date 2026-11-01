@@ -175,3 +175,11 @@ The original migrations, including applied 0004, are byte-for-byte unchanged. Th
 This corrects a local consistency defect; it does not supply deployed registry provenance, trustworthy live finality, conflict-resolution authority or any other missing launch evidence. SG-07 remains IN PROGRESS and production launch BLOCKED. No Git mutation, deployment, live payment or infrastructure change is authorized or performed.
 
 Final quarantine-correction verification: **243 application checks** pass, including **43 registry-admission checks**; **47 Foundry tests** pass. Build/lint/format/Functions build and five-migration repeat/checksum checks pass. No old migration was rewritten. Full and production-only audits still fail with the findings above. This remains local evidence only.
+
+## Upstream security continuation at owner baseline 4376156
+
+The [upstream security report](SG-07_UPSTREAM_SECURITY_REPORT.md) records the actual Fetch/DNS/connection boundary. Production access still denies every URL; URL/allowlist/DNS policy checks do not pin the runtime's actual network destination. A fixed named service binding to a reviewed non-proxy JSON handler is a candidate for owner review, not an implemented or approved scope change. Arbitrary merchant HTTPS remains blocked pending connection-safety proof.
+
+Local changes add strict ASCII authority/port handling, a server-owned exact resource/merchant/URL policy demonstrator, eligibility before challenge/verification/settlement, fresh GET/header isolation, manual redirect rejection, response/header/JSON bounds and one delivery timer including final clock validation. The demonstrator has no default fetch and is absent from production routes. It does not implement production DNS pinning, policy-version admission or a reliable deployed clock.
+
+Local tests: **32 upstream-security groups**, **95 SG-05 groups**, **280 aggregate groups**, and **47 Foundry tests** pass. Existing auth, ownership, registry/quarantine, health and frontend checks remain. Five migration digests are unchanged; no application schema or infrastructure changed. Audits still fail at **5 high/12 moderate**, production-only **5 high**. All other release gates and separate owner approvals remain in force. SG-07 remains IN PROGRESS and production launch BLOCKED.
