@@ -118,3 +118,7 @@ Owner must approve any narrowed fixed-service/HTTPS-origin product scope and rev
 ## Current dependency gate evidence — d1566c0 continuation
 
 **BLOCKED:** [current dependency assessment](SG-07_DEPENDENCY_SECURITY_REPORT.md) reproduces full audit 5 high/12 moderate and production-only 5 high, exit 1. No compatible upstream combined fix was found; versions remain unchanged. Browser/public Functions artifacts exclude vulnerable Zod and minimatch, but installed dependency advisories and future CDP exposure remain unresolved. Require supported parent fixes and fresh exact-artifact review; do not substitute current tree shaking for remediation or disable the CI audit gate. Local regressions pass: 280 application checks, 47 Foundry tests. This does not approve launch.
+
+## Settlement and recovery gate — current continuation
+
+See [settlement reliability evidence](SG-07_SETTLEMENT_RELIABILITY_REPORT.md). Local CAS/deadline/provenance/clock/receipt controls are hardened and exercised through real workerd/D1, including termination and restart. **BLOCKED:** production trusted time, independent settlement evidence admission, CDP durable reconciliation guarantees, paid-but-unfulfilled operator recovery and global resource limits remain unproven/unimplemented. Do not wire the SDK's automatic pending-retry server helper into production without reviewing its actual provider durability contract. Keep payment and real upstream routes disabled; local mocks cannot clear these gates.

@@ -69,7 +69,8 @@ export async function onRequest({
     block?: number
     source?: string
   }
-  let now = Date.now()
+  // Fixed LOCAL SIMULATION epoch; host wall-clock skew is not fixture authority.
+  let now = Date.parse('2026-11-02T00:00:00Z')
   const clock = async () => now
   if (body.action === 'seed') {
     const id = crypto.randomUUID(),

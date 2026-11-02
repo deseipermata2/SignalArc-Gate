@@ -51,6 +51,7 @@ let mode = {},
   onVerify,
   onSettle,
   onUpstream,
+  onReconcile,
   duplicatedSettles = 0,
   lastTransaction,
   conflictTransaction
@@ -81,7 +82,17 @@ const mock = createServer(async (req, res) => {
         : undefined,
     })
     if (path === '/clock')
-      return send(res, { now: localNow(), localSimulationOnly: true })
+      return send(
+        res,
+        {
+          now:
+            scenario.clock === 'malformed'
+              ? null
+              : localNow() + (scenario.clockOffset ?? 0),
+          localSimulationOnly: true,
+        },
+        scenario.clock === 'failure' ? 503 : 200,
+      )
     if (path === '/supported')
       return send(res, {
         kinds:
@@ -104,11 +115,25 @@ const mock = createServer(async (req, res) => {
           payer: '',
           disposition: 'unknown',
         })
+      if (onReconcile) await onReconcile()
+      const patch =
+        {
+          identity: { identity: 'wrong-identity' },
+          payer: { payer: other.address },
+          recipient: { recipient: other.address },
+          asset: { asset: other.address },
+          network: { network: 'eip155:0' },
+          amount: { amount: '999' },
+          contradictory: { disposition: 'not_submitted' },
+          malformed: { disposition: 'settled', settlement: null },
+          provenance: { localSimulationOnly: false },
+        }[scenario.reconcile] ?? {}
       return send(res, {
         ...entry,
         disposition:
           scenario.reconcile === 'wrong' ? 'unknown' : entry.disposition,
         ...(scenario.reconcile === 'mismatch' ? { amount: '999' } : {}),
+        ...patch,
       })
     }
     if (path === '/verify' || path === '/settle') {
@@ -140,6 +165,12 @@ const mock = createServer(async (req, res) => {
         if (which === 'http')
           return send(res, { error: 'LOCAL MOCK HTTP ERROR' }, 503)
         if (which === 'malformed') return send(res, { isValid: 'yes' })
+        if (which === 'contradictory')
+          return send(res, {
+            isValid: true,
+            payer: a.from,
+            invalidReason: 'LOCAL_REJECTED',
+          })
         if (which === 'large')
           return send(res, {
             isValid: true,
@@ -257,6 +288,15 @@ const mock = createServer(async (req, res) => {
         return send(res, { ...settlement, amount: '1001' })
       if (which === 'wrong-payer')
         return send(res, { ...settlement, payer: other.address })
+      if (which === 'zero-hash')
+        return send(res, { ...settlement, transaction: '0x' + '00'.repeat(32) })
+      if (which === 'null') return send(res, null)
+      if (which === 'pending-hash')
+        return send(res, {
+          ...settlement,
+          success: false,
+          errorReason: 'settlement_pending',
+        })
       if (which === 'empty-hash')
         return send(res, { ...settlement, transaction: '' })
       if (which === 'false-with-hash')
@@ -402,6 +442,7 @@ function reset() {
   onVerify = undefined
   onSettle = undefined
   onUpstream = undefined
+  onReconcile = undefined
 }
 async function seed(owner = buyer.address) {
   const id = `10000000-0000-4000-8000-${(++resourceCount).toString(16).padStart(12, '0')}`
@@ -569,6 +610,9 @@ try {
   conflictTransaction = evidence.transaction
   assert.equal(evidence.success, true)
   assert.equal(evidence.extra.localSimulationOnly, true)
+  assert.equal(evidence.extra.asset, asset)
+  assert.equal(evidence.extra.recipient, t.challenge.accepts[0].payTo)
+  assert.deepEqual(JSON.parse((await receipts(t))[0].settlement_json), evidence)
   assert.equal(count('/verify'), 1)
   assert.equal(count('/settle'), 1)
   assert.equal(count('/upstream'), 1)
@@ -723,6 +767,7 @@ try {
   }
   for (const verify of [
     'reject',
+    'contradictory',
     'wrong-payer',
     'malformed',
     'large',
@@ -736,7 +781,11 @@ try {
       p = await signed(n),
       s = count('/settle'),
       u = count('/upstream')
-    await submit(n, p, ['reject', 'wrong-payer'].includes(verify) ? 402 : 502)
+    await submit(
+      n,
+      p,
+      ['reject', 'contradictory', 'wrong-payer'].includes(verify) ? 402 : 502,
+    )
     assert.equal(count('/settle'), s)
     assert.equal(count('/upstream'), u)
     await noPayment(n)
@@ -769,6 +818,9 @@ try {
     'wrong-amount',
     'wrong-payer',
     'empty-hash',
+    'zero-hash',
+    'null',
+    'pending-hash',
     'false-with-hash',
     'redirect',
     'conflict',
@@ -1264,6 +1316,262 @@ try {
     assert.equal(r.status, 503)
     await r.arrayBuffer()
     pass('facilitator discovery without Base exact support fails closed')
+  }
+  // Settlement reliability continuation: all data and facilitator evidence remain local simulations.
+  for (const action of ['expireOperation', 'expire']) {
+    reset()
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    onVerify = () => control(action, { id: n.id })
+    await submit(n, p, 409)
+    assert.equal(count('/settle'), s)
+    assert.equal((await attempt(n)).phase, 'failed')
+    await noPayment(n)
+    pass(
+      `persisted ${action} during verification prevents a late settlement CAS`,
+    )
+  }
+  for (const clock of ['backward', 'forward', 'malformed', 'failure']) {
+    reset()
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    onVerify = () => {
+      if (clock === 'backward') mode.clockOffset = -10000
+      else if (clock === 'forward') mode.clockOffset = 100000
+      else mode.clock = clock
+    }
+    const response = await fetch(n.url, {
+      headers: { 'PAYMENT-SIGNATURE': p.header },
+    })
+    assert.notEqual(response.status, 200)
+    assert.equal(response.headers.get('payment-response'), null)
+    await response.arrayBuffer()
+    assert.equal(count('/settle'), s)
+    reset()
+    await noPayment(n)
+    await control('expireOperation', { id: n.id })
+    await control('recover')
+    assert.equal((await attempt(n)).phase, 'failed')
+    pass(
+      `clock ${clock} during verification fails closed without settlement; durable recovery remains terminal`,
+    )
+  }
+  reset()
+  {
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    onSettle = () => {
+      mode.clock = 'malformed'
+    }
+    await submit(n, p, 503)
+    reset()
+    assert.equal((await attempt(n)).phase, 'settlement_pending')
+    await noPayment(n)
+    await control('expireOperation', { id: n.id })
+    await control('recover')
+    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    await submit(n, p, 409)
+    assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
+    await submit(n, p, 200)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'clock failure after submission leaves a durable pending claim; recovery admits local evidence without charging again',
+    )
+  }
+  reset()
+  {
+    mode.settle = 'timeout'
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    const abort = new AbortController()
+    onSettle = () => abort.abort()
+    const canceled = await fetch(n.url, {
+      signal: abort.signal,
+      headers: { 'PAYMENT-SIGNATURE': p.header },
+    })
+      .then((r) => r.arrayBuffer())
+      .catch(() => null)
+    assert.equal(canceled, null)
+    await delay(1100)
+    assert.ok(
+      ['settlement_pending', 'settlement_unknown'].includes(
+        (await attempt(n)).phase,
+      ),
+    )
+    await noPayment(n)
+    reset()
+    await control('expireOperation', { id: n.id })
+    await control('recover')
+    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
+    await submit(n, p, 200)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'buyer disconnect after submission retains uncertainty; local reconciliation and delivery do not resubmit settlement',
+    )
+  }
+  const reconcileRequest = (id) =>
+    fetch(`${runtime.origin}/sg05/control`, {
+      method: 'POST',
+      headers: {
+        Origin: runtime.origin,
+        'X-Local-Only': 'yes',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'reconcile', id }),
+    })
+  reset()
+  {
+    mode.settle = 'drop'
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    await submit(n, p, 503)
+    for (const bad of [
+      'identity',
+      'payer',
+      'recipient',
+      'asset',
+      'network',
+      'amount',
+      'contradictory',
+      'malformed',
+      'provenance',
+    ]) {
+      mode = { reconcile: bad }
+      const result = await reconcileRequest(n.id)
+      assert.equal(result.status, 503, bad)
+      await result.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      pass(
+        `reconciliation ${bad} cannot alter unknown state, create a receipt or release content`,
+      )
+    }
+    mode = { reconcile: 'wrong' }
+    assert.equal(
+      (await control('reconcile', { id: n.id })).outcome,
+      'settlement_unknown',
+    )
+    await noPayment(n)
+    pass(
+      'unknown reconciliation evidence preserves uncertainty without resubmission',
+    )
+    reset()
+    await control('fault', { mode: 'analytics' })
+    const failed = await reconcileRequest(n.id)
+    assert.equal(failed.status, 503)
+    await failed.arrayBuffer()
+    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    await noPayment(n)
+    await control('fault', { mode: 'off' })
+    pass(
+      'D1 analytics interruption rolls back reconciliation phase and receipt in the same batch',
+    )
+    const raced = await Promise.all([
+      reconcileRequest(n.id),
+      reconcileRequest(n.id),
+    ])
+    assert.deepEqual(raced.map((r) => r.status).sort(), [200, 409])
+    for (const result of raced) await result.arrayBuffer()
+    const records = await inspect()
+    assert.equal(
+      records.receipts.filter((r) => r.attempt_id === n.id).length,
+      1,
+    )
+    assert.equal(
+      records.analytics.filter((r) => r.attempt_id === n.id).length,
+      1,
+    )
+    assert.equal((await attempt(n)).phase, 'settled')
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'concurrent reconciliation commits exactly one receipt and analytics event using native D1 CAS',
+    )
+    const original = (await receipts(n))[0]
+    const conflicting = {
+      ...ledger.get(identity(p.payload.payload.authorization)).settlement,
+      transaction: '0x' + 'ab'.repeat(32),
+    }
+    assert.equal(
+      (await control('duplicateSettlement', { id: n.id, result: conflicting }))
+        .changed,
+      false,
+    )
+    assert.deepEqual((await receipts(n))[0], original)
+    const duplicate = await reconcileRequest(n.id)
+    assert.equal(duplicate.status, 409)
+    await duplicate.arrayBuffer()
+    assert.equal((await attempt(n)).phase, 'settled')
+    await submit(n, p, 200)
+    await submit(n, p, 409)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'late conflicting settlement and duplicate reconciliation cannot replace a persisted receipt or initiate another charge',
+    )
+  }
+  reset()
+  {
+    mode.settle = 'drop'
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    await submit(n, p, 503)
+    let arrived
+    const observed = new Promise((resolve) => {
+      arrived = resolve
+    })
+    onReconcile = async () => {
+      arrived()
+      await delay(1500)
+    }
+    const pending = reconcileRequest(n.id)
+      .then((r) => r.arrayBuffer())
+      .catch(() => null)
+    await observed
+    const port = Number(new URL(runtime.origin).port)
+    await runtime.close('SIGKILL')
+    await pending
+    reset()
+    runtime = await localRuntime({
+      statePath: state,
+      includeApp: true,
+      fixture,
+      listenPort: port,
+    })
+    assert.deepEqual((await runtime.control('migrate')).applied, [])
+    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    await noPayment(n)
+    assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
+    await submit(n, p, 200)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'actual worker termination during reconciliation preserves unknown state; fresh runtime reload resolves once without resettlement',
+    )
+  }
+  reset()
+  {
+    mode.settle = 'drop'
+    const n = await issue(await seed()),
+      p = await signed(n),
+      s = count('/settle')
+    await submit(n, p, 503)
+    await control('legacyEvidence', { id: n.id })
+    reset()
+    const rejected = await reconcileRequest(n.id)
+    assert.equal(rejected.status, 409)
+    await rejected.arrayBuffer()
+    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    assert.equal((await attempt(n)).evidence_kind, 'legacy_unconfirmed')
+    await noPayment(n)
+    assert.equal(count('/settle') - s, 1)
+    pass(
+      'local reconciliation cannot promote a legacy/untrusted attempt into settlement evidence',
+    )
   }
   ordinary = await localRuntime({ includeApp: true })
   await ordinary.control('migrate')

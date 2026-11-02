@@ -2,11 +2,7 @@ import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { PaymentPayloadSchema } from '@x402/core/schemas'
 import { decodePaymentSignatureHeader } from '@x402/core/http'
-import type {
-  PaymentPayload,
-  PaymentRequirements,
-  SettleResponse,
-} from '@x402/core/types'
+import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
 import { createCdpFacilitatorClient } from '@coinbase/cdp-sdk/x402'
 import { walletAddress } from '../../shared/resources'
 import { hash } from '../sg03/http'
@@ -164,23 +160,50 @@ export function authorizationFresh(a: Authorization, nowMs: number) {
     BigInt(a.validBefore) <= BigInt(now + 300)
   )
 }
+/** Runtime checks apply even to injected clients whose TypeScript types promise valid replies. */
+export function validVerification(result: unknown, payer: string): boolean {
+  if (!result || typeof result !== 'object' || Array.isArray(result))
+    return false
+  const r = result as Record<string, unknown>
+  return (
+    r.isValid === true &&
+    typeof r.payer === 'string' &&
+    r.payer.toLowerCase() === payer.toLowerCase() &&
+    (r.invalidReason === undefined || r.invalidReason === '') &&
+    (r.invalidMessage === undefined || r.invalidMessage === '')
+  )
+}
 export function validSettlement(
-  result: SettleResponse,
+  result: unknown,
   payer: string,
   amount: string,
   recipient: string,
-) {
+): boolean {
+  if (!result || typeof result !== 'object' || Array.isArray(result))
+    return false
+  const r = result as Record<string, unknown>
+  if (
+    r.extra !== undefined &&
+    (!r.extra || typeof r.extra !== 'object' || Array.isArray(r.extra))
+  )
+    return false
+  const extra = r.extra as Record<string, unknown> | undefined
   return (
-    result.success === true &&
-    result.network === NETWORK &&
-    /^0x[0-9a-fA-F]{64}$/.test(result.transaction) &&
-    !/^0x0{64}$/.test(result.transaction) &&
-    result.payer?.toLowerCase() === payer &&
-    (result.amount === undefined || result.amount === amount) &&
-    !result.errorReason &&
-    (result.extra?.asset === undefined ||
-      String(result.extra.asset).toLowerCase() === USDC.toLowerCase()) &&
-    (result.extra?.recipient === undefined ||
-      String(result.extra.recipient).toLowerCase() === recipient.toLowerCase())
+    r.success === true &&
+    r.network === NETWORK &&
+    typeof r.transaction === 'string' &&
+    /^0x[0-9a-fA-F]{64}$/.test(r.transaction) &&
+    !/^0x0{64}$/.test(r.transaction) &&
+    typeof r.payer === 'string' &&
+    r.payer.toLowerCase() === payer.toLowerCase() &&
+    (r.amount === undefined || r.amount === amount) &&
+    (r.errorReason === undefined || r.errorReason === '') &&
+    (r.errorMessage === undefined || r.errorMessage === '') &&
+    (extra?.asset === undefined ||
+      (typeof extra.asset === 'string' &&
+        extra.asset.toLowerCase() === USDC.toLowerCase())) &&
+    (extra?.recipient === undefined ||
+      (typeof extra.recipient === 'string' &&
+        extra.recipient.toLowerCase() === recipient.toLowerCase()))
   )
 }

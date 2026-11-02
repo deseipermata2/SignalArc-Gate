@@ -1,7 +1,8 @@
 import type { PaymentRequirements, SettleResponse } from '@x402/core/types'
 import { GatewayError } from './bounds'
-import { clockTime, type TrustedClock } from './clock'
+import { clockTime, monotonicClock, type TrustedClock } from './clock'
 import { NETWORK, USDC, type Snapshot } from './registry'
+import { validSettlement } from './protocol'
 export type Phase =
   | 'created'
   | 'rejected'
@@ -17,6 +18,7 @@ export type Phase =
   | 'legacy_unreconciled'
 export interface Attempt {
   id: string
+  evidence_kind: 'legacy_unconfirmed' | 'local_simulation' | 'confirmed_onchain'
   asset: string
   recipient: string
   merchant_id: string
@@ -51,10 +53,13 @@ const status = (phase: Phase) =>
           ? 'created'
           : 'pending'
 export class PaymentStore {
+  public clock: TrustedClock
   constructor(
     public db: D1Database,
-    public clock: TrustedClock,
-  ) {}
+    clock: TrustedClock,
+  ) {
+    this.clock = monotonicClock(clock)
+  }
   get(id: string) {
     return this.db
       .prepare('SELECT * FROM payment_attempts WHERE id = ?')
@@ -109,9 +114,9 @@ export class PaymentStore {
       const now = await clockTime(this.clock)
       const r = await this.db
         .prepare(
-          `UPDATE payment_attempts SET authorization_key = ?, authorization_fingerprint = ?, buyer_address = ?, phase = 'verifying', status = 'pending', updated_at = ?, operation_deadline = ? WHERE id = ? AND phase = 'created' AND expires_at > ?`,
+          `UPDATE payment_attempts SET authorization_key = ?, authorization_fingerprint = ?, buyer_address = ?, phase = 'verifying', status = 'pending', updated_at = ?, operation_deadline = ? WHERE id = ? AND phase = 'created' AND evidence_kind = 'local_simulation' AND expires_at > ? AND updated_at <= ?`,
         )
-        .bind(identity, fingerprint, payer, now, now + 10000, a.id, now)
+        .bind(identity, fingerprint, payer, now, now + 10000, a.id, now, now)
         .run()
       return r.meta.changes === 1
     } catch (error) {
@@ -145,6 +150,15 @@ export class PaymentStore {
       id,
       from,
     ]
+    // A restarted/stalled verifier may not acquire a new submission lease after expiry.
+    if (
+      (from === 'verifying' && to === 'verified') ||
+      (from === 'verified' && to === 'settlement_pending')
+    ) {
+      sql +=
+        ' AND operation_deadline > ? AND expires_at > ? AND updated_at <= ?'
+      values.push(now, now, now)
+    }
     if (s) {
       sql += ` AND EXISTS (SELECT 1 FROM api_resources r JOIN merchants m ON m.id = r.merchant_id JOIN resource_registry_bindings b ON b.resource_id = r.id WHERE r.id = payment_attempts.resource_id AND r.merchant_id = ? AND m.wallet_address = ? AND r.enabled = 1 AND r.payment_revision = ? AND b.generation = ? AND b.source = 'local_simulation')`
       values.push(s.merchantId, s.owner, s.revision, s.binding.generation)
@@ -162,16 +176,22 @@ export class PaymentStore {
     result: SettleResponse,
     from: 'settlement_pending' | 'settlement_unknown',
   ) {
+    if (
+      !a.buyer_address ||
+      !a.authorization_key ||
+      !validSettlement(result, a.buyer_address, a.amount_atomic, a.recipient)
+    )
+      throw new GatewayError(503, 'settlement_evidence_invalid')
     const now = await clockTime(this.clock)
     const rows = await this.db.batch([
       this.db
         .prepare(
-          `UPDATE payment_attempts SET phase = 'settled', status = 'settled', updated_at = ?, failure_code = NULL WHERE id = ? AND phase = ? AND authorization_key = ?`,
+          `UPDATE payment_attempts SET phase = 'settled', status = 'settled', updated_at = ?, failure_code = NULL WHERE id = ? AND phase = ? AND authorization_key = ? AND evidence_kind = 'local_simulation' AND NOT EXISTS (SELECT 1 FROM payment_receipts WHERE attempt_id = payment_attempts.id)`,
         )
         .bind(now, a.id, from, a.authorization_key),
       this.db
         .prepare(
-          `INSERT INTO payment_receipts (id,attempt_id,transaction_hash,network,amount_atomic,payer_address,payout_address,block_number,created_at,evidence_kind,authorization_key,config_version,config_hash,settlement_json) SELECT ?,id,?,network,amount_atomic,buyer_address,recipient,?,?,?,?,?,?,? FROM payment_attempts WHERE id = ? AND phase = 'settled' AND NOT EXISTS (SELECT 1 FROM payment_receipts WHERE attempt_id = ?)`,
+          `INSERT INTO payment_receipts (id,attempt_id,transaction_hash,network,amount_atomic,payer_address,payout_address,block_number,created_at,evidence_kind,authorization_key,config_version,config_hash,settlement_json) SELECT ?,id,?,network,amount_atomic,buyer_address,recipient,?,?,?,?,?,?,? FROM payment_attempts WHERE changes() = 1 AND id = ? AND phase = 'settled' AND NOT EXISTS (SELECT 1 FROM payment_receipts WHERE attempt_id = ?)`,
         )
         .bind(
           crypto.randomUUID(),
@@ -182,13 +202,16 @@ export class PaymentStore {
           a.authorization_key,
           a.config_version,
           a.config_hash,
-          JSON.stringify({ ...result, extra: { localSimulationOnly: true } }),
+          JSON.stringify({
+            ...result,
+            extra: { ...result.extra, localSimulationOnly: true },
+          }),
           a.id,
           a.id,
         ),
       this.db
         .prepare(
-          `INSERT INTO analytics_events (id,merchant_id,resource_id,event_type,occurred_at,attempt_id,evidence_kind) SELECT ?,merchant_id,resource_id,?,?,id,? FROM payment_attempts WHERE id = ? AND phase = 'settled' AND NOT EXISTS (SELECT 1 FROM analytics_events WHERE attempt_id = ? AND event_type = 'payment_settled')`,
+          `INSERT INTO analytics_events (id,merchant_id,resource_id,event_type,occurred_at,attempt_id,evidence_kind) SELECT ?,merchant_id,resource_id,?,?,id,? FROM payment_attempts WHERE changes() = 1 AND id = ? AND phase = 'settled' AND NOT EXISTS (SELECT 1 FROM analytics_events WHERE attempt_id = ? AND event_type = 'payment_settled')`,
         )
         .bind(
           crypto.randomUUID(),

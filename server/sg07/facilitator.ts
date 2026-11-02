@@ -6,11 +6,12 @@ import type {
   VerifyResponse,
 } from '@x402/core/types'
 import { boundedJson, canonical, deadline, GatewayError } from '../sg05/bounds'
-import { clockTime, type TrustedClock } from '../sg05/clock'
+import { clockTime, monotonicClock, type TrustedClock } from '../sg05/clock'
 import {
   authorizationFresh,
   payment,
   validSettlement,
+  validVerification,
   type Authorization,
 } from '../sg05/protocol'
 import { NETWORK, USDC } from '../sg05/registry'
@@ -29,8 +30,9 @@ interface Verified {
 /** Integration boundary only: no client factory, credentials, routes, persistence or fulfillment. */
 export function createFacilitatorAdapter(
   client: FacilitatorClient,
-  clock: TrustedClock,
+  readClock: TrustedClock,
 ) {
+  const clock = monotonicClock(readClock)
   const verified = new WeakSet<Verified>()
   return {
     async verify(
@@ -63,9 +65,7 @@ export function createFacilitatorAdapter(
       boundedJson(JSON.stringify(response))
       if (
         (await clockTime(clock)) - started >= 1000 ||
-        response.isValid !== true ||
-        response.payer?.toLowerCase() !== parsed.payer ||
-        response.invalidReason
+        !validVerification(response, parsed.payer)
       )
         throw new GatewayError(402, 'facilitator_verification_rejected')
       const token = {
@@ -98,8 +98,15 @@ export function createFacilitatorAdapter(
         throw new GatewayError(402, 'authorization_expired')
       if (!(await claimPending()))
         throw new GatewayError(409, 'settlement_already_claimed')
-      const started = await clockTime(clock)
       try {
+        const started = await clockTime(clock)
+        if (
+          !authorizationFresh(
+            data.payload.payload.authorization as Authorization,
+            started,
+          )
+        )
+          return { disposition: 'settlement_unknown' }
         const response = await deadline(() =>
           client.settle(data.payload, data.required),
         )

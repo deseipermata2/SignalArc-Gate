@@ -246,7 +246,7 @@ async function control(request: Request, env: Env) {
     const receipts = (
       await db
         .prepare(
-          'SELECT attempt_id,transaction_hash,network,amount_atomic,payer_address,payout_address,block_number,evidence_kind FROM payment_receipts',
+          'SELECT attempt_id,transaction_hash,network,amount_atomic,payer_address,payout_address,block_number,evidence_kind,settlement_json FROM payment_receipts',
         )
         .all()
     ).results
@@ -368,12 +368,34 @@ async function control(request: Request, env: Env) {
       .run()
     return reply(200, { changed: true })
   }
+  if (body.action === 'legacyEvidence') {
+    await db
+      .prepare(
+        "UPDATE payment_attempts SET evidence_kind='legacy_unconfirmed' WHERE id=?",
+      )
+      .bind(String(body.id))
+      .run()
+    return reply(200, { quarantined: true })
+  }
+  if (body.action === 'expireOperation') {
+    await db
+      .prepare('UPDATE payment_attempts SET operation_deadline=? WHERE id=?')
+      .bind(0, String(body.id))
+      .run()
+    return reply(200, { changed: true })
+  }
   if (body.action === 'fault') {
     await db.prepare('DROP TRIGGER IF EXISTS sg05_fault').run()
     if (body.mode === 'receipt')
       await db
         .prepare(
           "CREATE TRIGGER sg05_fault BEFORE INSERT ON payment_receipts BEGIN SELECT RAISE(ABORT,'local_receipt_fault'); END",
+        )
+        .run()
+    else if (body.mode === 'analytics')
+      await db
+        .prepare(
+          "CREATE TRIGGER sg05_fault BEFORE INSERT ON analytics_events BEGIN SELECT RAISE(ABORT,'local_analytics_fault'); END",
         )
         .run()
     else if (body.mode === 'claim')
@@ -391,6 +413,14 @@ async function control(request: Request, env: Env) {
     return reply(200, { fault: body.mode })
   }
   const store = new PaymentStore(db, () => trustedClock(env))
+  if (body.action === 'duplicateSettlement') {
+    const attempt = await store.get(String(body.id))
+    if (!attempt) throw new GatewayError(404, 'attempt_missing')
+    const result = body.result as import('@x402/core/types').SettleResponse
+    return reply(200, {
+      changed: await store.settle(attempt, result, 'settlement_unknown'),
+    })
+  }
   if (body.action === 'recover')
     return reply(200, { recovered: await store.recover() })
   if (body.action === 'reconcile') {

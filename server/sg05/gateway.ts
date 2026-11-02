@@ -3,7 +3,7 @@ import {
   encodePaymentResponseHeader,
 } from '@x402/core/http'
 import type { PaymentRequirements, SettleResponse } from '@x402/core/types'
-import { clockTime, type TrustedClock } from './clock'
+import { clockTime, monotonicClock, type TrustedClock } from './clock'
 import { hash, randomToken } from '../sg03/http'
 import { deadline, GatewayError, reply } from './bounds'
 import { snapshot, type RegistryReader, type Snapshot } from './registry'
@@ -15,6 +15,7 @@ import {
   requirements,
   resourceInfo,
   validSettlement,
+  validVerification,
 } from './protocol'
 import { PaymentStore, type Attempt } from './store'
 import { protectedJson, type UpstreamAccess } from './upstream'
@@ -28,7 +29,8 @@ export interface LocalServices {
 }
 /** Deliberately not imported by production Functions. Success is only a labeled local simulation. */
 export function createLocalGateway(services: LocalServices) {
-  const { db, origin, facilitatorOrigin, registry, upstream, clock } = services
+  const { db, origin, facilitatorOrigin, registry, upstream } = services
+  const clock = monotonicClock(services.clock)
   const store = new PaymentStore(db, clock)
   async function eligibleSnapshot(id: string) {
     return deadline(async () => {
@@ -278,10 +280,7 @@ export function createLocalGateway(services: LocalServices) {
         )
         throw new GatewayError(502, 'verification_unavailable')
       }
-      if (
-        verified.isValid !== true ||
-        verified.payer?.toLowerCase() !== signed.payer
-      ) {
+      if (!validVerification(verified, signed.payer)) {
         await store.advance(
           active.id,
           'verifying',
@@ -337,7 +336,7 @@ export function createLocalGateway(services: LocalServices) {
         )
       ) {
         const definite =
-          result.success === false &&
+          result?.success === false &&
           result.transaction === '' &&
           result.errorReason ===
             'local_simulation_rejected_before_submission' &&

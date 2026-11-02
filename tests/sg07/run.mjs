@@ -129,7 +129,7 @@ try {
       assetTransferMethod: 'eip3009',
     },
   }
-  const now = Math.floor(Date.now() / 1000),
+  const now = Math.floor(Date.parse('2026-11-02T00:00:00Z') / 1000),
     authorization = {
       from: account.address,
       to: addr,
@@ -173,7 +173,17 @@ try {
     },
     payload: { authorization, signature },
   })
-  for (const mode of ['invalid-verification', 'wrong-token']) {
+  for (const mode of [
+    'invalid-verification',
+    'wrong-token',
+    'wrong-network',
+    'verification-contradictory',
+    'verification-malformed',
+    'verification-timeout',
+    'verification-backward-clock',
+    'verification-forward-clock',
+    'verification-malformed-clock',
+  ]) {
     const r = await invoke('facilitator', mode, {
       header,
       payer: account.address,
@@ -186,7 +196,7 @@ try {
     header,
     payer: account.address,
   })
-  assert.equal(paid.status, 200)
+  assert.equal(paid.status, 200, JSON.stringify(paid.body))
   assert.equal(paid.body.verifyCalls, 1)
   assert.equal(paid.body.settleCalls, 1)
   assert.equal(paid.body.state.state, 'settlement_pending')
@@ -212,12 +222,26 @@ try {
   pass(
     'lost settlement response is unknown with no resubmission or fabricated receipt; durable orchestration remains SG05-owned',
   )
-  for (const mode of ['wrong-settlement-network', 'wrong-settlement-amount']) {
+  for (const mode of [
+    'wrong-settlement-network',
+    'wrong-settlement-amount',
+    'settlement-missing-hash',
+    'settlement-zero-hash',
+    'settlement-wrong-payer',
+    'settlement-wrong-recipient',
+    'settlement-malformed',
+    'settlement-timeout',
+    'settlement-backward-clock',
+    'settlement-late-clock',
+    'settlement-malformed-clock',
+    'claim-expired-clock',
+    'claim-malformed-clock',
+  ]) {
     const rejected = await invoke('facilitator', mode, {
       header,
       payer: account.address,
     })
-    assert.equal(rejected.body.settleCalls, 1)
+    assert.equal(rejected.body.settleCalls, mode.startsWith('claim-') ? 0 : 1)
     assert.equal(
       rejected.body.values.filter((x) => x.disposition === 'settlement_unknown')
         .length,

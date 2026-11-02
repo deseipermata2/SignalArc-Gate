@@ -63,7 +63,8 @@ export async function onRequest({
     header?: string
     payer?: string
   }
-  let now = Date.now(),
+  // Fixed LOCAL SIMULATION epoch; host wall-clock skew is not fixture authority.
+  let now = Date.parse('2026-11-02T00:00:00Z'),
     calls = 0
   const clock = async () => now
   const policy: RegistryPolicy = {
@@ -209,12 +210,18 @@ export async function onRequest({
         },
       }
       if (body.mode === 'wrong-token') required.asset = addr
+      if (body.mode === 'wrong-network') required.network = 'eip155:0'
       let verifyCalls = 0,
         settleCalls = 0
       const adapter = createFacilitatorAdapter(
         {
           verify: async (payload) => {
             verifyCalls++
+            if (body.mode === 'verification-timeout')
+              return new Promise(() => {})
+            if (body.mode === 'verification-malformed')
+              return null as unknown as import('@x402/core/types').VerifyResponse
+
             const a = payload.payload.authorization as Record<string, string>
             const signer = await recoverTypedDataAddress({
               domain: {
@@ -244,7 +251,13 @@ export async function onRequest({
               },
               signature: payload.payload.signature as Hex,
             })
+            if (body.mode === 'verification-backward-clock') now -= 10000
+            if (body.mode === 'verification-forward-clock') now += 120000
+            if (body.mode === 'verification-malformed-clock') now = NaN
             return {
+              ...(body.mode === 'verification-contradictory'
+                ? { invalidReason: 'LOCAL_REJECTED' }
+                : {}),
               isValid:
                 body.mode !== 'invalid-verification' &&
                 signer.toLowerCase() === body.payer?.toLowerCase(),
@@ -253,6 +266,13 @@ export async function onRequest({
           },
           settle: async () => {
             settleCalls++
+            if (body.mode === 'settlement-timeout') return new Promise(() => {})
+            if (body.mode === 'settlement-backward-clock') now -= 10000
+            if (body.mode === 'settlement-late-clock') now += 1500
+            if (body.mode === 'settlement-malformed-clock') now = NaN
+            if (body.mode === 'settlement-malformed')
+              return null as unknown as import('@x402/core/types').SettleResponse
+
             if (body.mode === 'ambiguous')
               throw Error('secret provider diagnostic')
             return {
@@ -261,8 +281,23 @@ export async function onRequest({
                 body.mode === 'wrong-settlement-network'
                   ? 'eip155:1'
                   : 'eip155:8453',
-              transaction: '0x' + '55'.repeat(32),
-              payer: body.payer,
+              transaction:
+                body.mode === 'settlement-missing-hash'
+                  ? ''
+                  : '0x' +
+                    (body.mode === 'settlement-zero-hash' ? '00' : '55').repeat(
+                      32,
+                    ),
+              payer: body.mode === 'settlement-wrong-payer' ? addr : body.payer,
+              extra:
+                body.mode === 'settlement-wrong-recipient'
+                  ? {
+                      recipient:
+                        addr === required.payTo
+                          ? '0x0000000000000000000000000000000000000001'
+                          : addr,
+                    }
+                  : undefined,
               amount: body.mode === 'wrong-settlement-amount' ? '1001' : '1000',
             }
           },
@@ -285,13 +320,20 @@ export async function onRequest({
           required,
           'http://127.0.0.1/sg07/local-only',
         )
-        const claim = async () =>
-          (
-            await db
-              .prepare('UPDATE sg07_claims SET state=? WHERE id=? AND state=?')
-              .bind('settlement_pending', id, 'verified')
-              .run()
-          ).meta.changes === 1
+        const claim = async () => {
+          const changed =
+            (
+              await db
+                .prepare(
+                  'UPDATE sg07_claims SET state=? WHERE id=? AND state=?',
+                )
+                .bind('settlement_pending', id, 'verified')
+                .run()
+            ).meta.changes === 1
+          if (body.mode === 'claim-expired-clock') now += 120000
+          if (body.mode === 'claim-malformed-clock') now = NaN
+          return changed
+        }
         const results = await Promise.allSettled([
           adapter.settleAfterClaim(permit, claim),
           adapter.settleAfterClaim(permit, claim),
@@ -311,9 +353,17 @@ export async function onRequest({
           state,
           metadata: resourceInfo('http://127.0.0.1/sg07/local-only'),
         })
-      } catch {
+      } catch (error) {
         return Response.json(
-          { rejected: true, verifyCalls, settleCalls },
+          {
+            rejected: true,
+            verifyCalls,
+            settleCalls,
+            error:
+              error && typeof error === 'object' && 'code' in error
+                ? String(error.code)
+                : 'facilitator_fixture_rejected',
+          },
           { status: 402 },
         )
       } finally {

@@ -1,5 +1,5 @@
 import type { SettleResponse } from '@x402/core/types'
-import { GatewayError } from './bounds'
+import { boundedJson, GatewayError } from './bounds'
 import { NETWORK, USDC } from './registry'
 import { validSettlement } from './protocol'
 import { PaymentStore } from './store'
@@ -24,12 +24,21 @@ export async function reconcileUnknown(
   if (
     !attempt ||
     attempt.phase !== 'settlement_unknown' ||
+    attempt.evidence_kind !== 'local_simulation' ||
     !attempt.authorization_key ||
     !attempt.buyer_address
   )
     throw new GatewayError(409, 'attempt_not_reconcilable')
   const evidence = await lookup(attempt.authorization_key)
+  // Returned objects are untrusted runtime values even when a local capability is typed.
+  boundedJson(JSON.stringify(evidence))
   if (
+    !evidence ||
+    typeof evidence !== 'object' ||
+    typeof evidence.asset !== 'string' ||
+    typeof evidence.recipient !== 'string' ||
+    typeof evidence.payer !== 'string' ||
+    !['settled', 'not_submitted', 'unknown'].includes(evidence.disposition) ||
     evidence.localSimulationOnly !== true ||
     evidence.identity !== attempt.authorization_key ||
     evidence.network !== NETWORK ||
@@ -55,6 +64,12 @@ export async function reconcileUnknown(
       throw new GatewayError(409, 'reconciliation_raced')
     return 'settled'
   }
+  if (
+    evidence.disposition === 'settled' ||
+    (evidence.disposition === 'not_submitted' &&
+      evidence.settlement !== undefined)
+  )
+    throw new GatewayError(503, 'reconciliation_evidence_conflict')
   if (evidence.disposition === 'not_submitted') {
     if (
       !(await store.advance(
