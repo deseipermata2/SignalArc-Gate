@@ -10,7 +10,7 @@
     "production": {
       "vars": {
         "BASE_CHAIN_ID": "8453",
-        "APP_ORIGIN": "https://signalarc-gate.pages.dev"
+        "APP_ORIGIN": "https://gate.signalarc.fun"
       },
       "d1_databases": [
         {
