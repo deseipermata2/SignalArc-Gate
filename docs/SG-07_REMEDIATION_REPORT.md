@@ -211,3 +211,92 @@ Negative package-isolation probe: Wrangler exits **1** when required SVM resolut
 **Final verdict: BLOCKED.** This task delivered local compiler/artifact, admission-read, cryptographic settlement observation, parsing/privacy, abuse-budget, CI and regression improvements across the remaining checklist. It does not turn a local simulator into a production gateway, authorize narrowing the product silently, supply a secure arbitrary-HTTPS connection, or resolve an unsupported dependency graph. Further integration/security engineering is explicitly listed above; the owner should not infer that only a manual contract broadcast remains.
 
 No Git add/commit/push/pull/fetch/merge/checkout/reset/config/branch mutation, deployment, real RPC/CDP/upstream request, transaction signing/broadcast, USDC transfer, ETH spend, production credential collection, remote D1, Cloudflare/DNS mutation or unrelated repository operation occurred. Only ephemeral unfunded typed-data test keys were generated within existing/new local test processes; they were never printed, persisted or used for a transaction. SG-07 remains IN PROGRESS; no SG-08 work or roadmap completion change was made. Stop for owner/ChatGPT review.
+
+## SG-07 continuation — durable settlement observation review at `a48436f`
+
+This addendum records the next local-only continuation; the earlier compiler comparison and prior remediation evidence above were not repeated or rewritten. Read-only Git inspection began at owner checkpoint **`a48436f`** with only the twelve existing review archives untracked. No tracked edits were present before this continuation. No applicable `AGENTS.md` or canonical V2 rules/roadmap files were available locally.
+
+### Registry admission boundary
+
+The existing `createRegistryReview` already composes the server-side D1 resource/binding snapshot, pinned registry reader, and append-only `registry_evidence_journal` write. It uses resource revision and binding generation CAS, stores provenance and RPC response digests, preserves replay/conflict outcomes, and always returns `productionAdmitted: false`. Migration 0004/0005 quarantine and the database triggers still prohibit `onchain_confirmed` writes; no code path was added to bypass those controls. This review flow remains review-only. It cannot establish an approved contract deployment, trustworthy RPC source, code-hash authorization, canonical finality policy, or production admission authority. These are not locally resolvable from fixtures, and production admission remains blocked pending owner-approved real deployment evidence and a separately reviewed trust policy.
+
+### Settlement observation/D1 integration
+
+Added migration **0007** (`migrations/0007_sg07_settlement_observations.sql`) and internal `server/sg07/settlement-review.ts`. The local review service loads a specific D1 attempt under a server-supplied merchant ID, requires `settlement_unknown` plus exact local-simulation provenance, and derives payer, recipient, amount, asset, network, authorization identity and fingerprint from that row. It invokes the existing read-only Base 8453 observer using an internally supplied candidate hash, validates the observer result again, and appends only a `LOCAL SIMULATION ONLY` observation. Duplicate identical observations are idempotent. Different transaction/configuration evidence for the same attempt creates a durable `conflict` outcome; effective review state remains conflicted thereafter.
+
+Migration 0007 creates one append-only `settlement_evidence_observations` table with foreign keys to the exact attempt, merchant, and composite resource ownership. SQL checks constrain Base Mainnet, native USDC, exact integer atomic amount, local-simulation provenance, and the JSON evidence marker `rpc_observation_only` / `productionAdmitted:false`. An insert trigger matches every recorded identity field against the current attempt and requires its state still be `settlement_unknown` and `evidence_kind='local_simulation'`. Update/delete triggers make rows immutable. The table has no path into `payment_receipts`, `analytics_events`, attempt phase transitions, or protected response release. The production Pages route tree does not import this service.
+
+This is an **audit/review record**, not payment reconciliation or settlement admission. It intentionally cannot mark a payment settled, resolve an unknown state, authorize content, or represent authentic Mainnet evidence. A candidate hash is only an internal lookup hint and the mock RPC source remains untrusted. The production orchestration still lacks approved RPC/provider authority, independently reviewed finality policy, trusted evidence admission and a crash-safe operator recovery path. No real facilitator hash or real transaction was used.
+
+### Targeted verification and current dependency recheck
+
+The targeted `npm run test:release-security` completed with **62 checks passed** in actual local Wrangler Pages/workerd and D1. New cases cover successful observer-to-D1 review persistence, duplicate idempotency, server-supplied merchant isolation, rejection of forged authority/amount fields without writes, append-only update/delete denial, durable conflict recording, unchanged `settlement_unknown` and `local_simulation` attempt state, and zero payment receipts. Existing 56 checks remain intact. Local RPC fixtures and unfunded typed-data test keys only; all observations are explicitly non-authoritative.
+
+Fresh `npm audit` still exits 1 with **17 affected entries (5 high, 12 moderate)**; `npm audit --omit=dev` exits 1 with **5 high**. Current [CDP 1.60.0](https://registry.npmjs.org/@coinbase/cdp-sdk/1.60.0) metadata still requires Zod `^3.25.76`, SVM `^2.25.0`, and `@solana/kit ^5.5.1`; patched [SVM 2.29.0](https://registry.npmjs.org/@x402/svm/2.29.0) requires Kit `>=8.0.0`, so it is not a compatible swap. Current [x402 core 2.29.0](https://registry.npmjs.org/@x402/core/2.29.0) uses patched Zod 4, but CDP's direct Zod-3/abitype requirements remain. Latest [`@eslint/config-array` 0.23.5](https://registry.npmjs.org/@eslint/config-array/0.23.5) and [typescript-eslint 8.72.1](https://registry.npmjs.org/typescript-eslint/8.72.1) still require minimatch `^10.2.x`; [minimatch 11.0.4](https://registry.npmjs.org/minimatch/11.0.4) is outside that supported parent range. No dependency was changed and no advisory was suppressed. The Zod/CDP and minimatch parent-chain blockers remain unresolved.
+
+### Commands and results for this continuation
+
+| Command                           | Result                                                                                    |
+| --------------------------------- | ----------------------------------------------------------------------------------------- |
+| `npm run test:release-security`   | PASS, 62 local Pages/workerd + D1 checks                                                  |
+| `npm run test:registry-admission` | PASS, 43 checks                                                                           |
+| `npm run test:sg05`               | PASS, 122 checks                                                                          |
+| `npm run test:sg07`               | PASS, 72 checks                                                                           |
+| `npm run test:sg03`               | PASS, 14 checks                                                                           |
+| `npm run test:sg06`               | PASS, 20 checks                                                                           |
+| `npm test`                        | PASS, exit 0; 396 checks across nine suites (17 + 14 + 14 + 122 + 20 + 72 + 43 + 32 + 62) |
+| `npm run build`                   | PASS                                                                                      |
+| `npm run lint`                    | PASS                                                                                      |
+| `npm run format:check`            | PASS after formatting this report                                                         |
+| `npm run build:functions`         | PASS                                                                                      |
+| `npm run check:bundle-boundary`   | PASS; production Functions/browser graphs exclude SG-07 review and test-only code         |
+| `npm audit`                       | FAIL, 17 findings (5 high, 12 moderate), exit 1                                           |
+| `npm audit --omit=dev`            | FAIL, 5 high findings, exit 1                                                             |
+| `git diff --check`                | PASS                                                                                      |
+
+The migration is forward-only. All previous migration bytes are unchanged. Local D1 applies the seven migrations and a second invocation verifies the stored digests and reports no pending migration. No remote D1 operation was performed.
+
+### Changed files in this continuation
+
+- `migrations/0007_sg07_settlement_observations.sql`
+- `server/sg07/settlement-review.ts`
+- `tests/release-security/handler.ts`
+- `tests/release-security/run.mjs`
+- `tests/sg03/run.mjs`
+- `tests/sg05/run.mjs`
+- `tests/sg06/run.mjs`
+- `tests/registry-admission/run.mjs`
+- `docs/SG-07_REMEDIATION_REPORT.md`
+
+### Current decision and next required owner decision
+
+**SG-07 remains IN PROGRESS; production launch remains BLOCKED.** The safe local integration is durable and deliberately non-authoritative. It does not complete production registry admission or payment reconciliation. Next, the owner must decide whether to authorize a real deployment and identify the trusted RPC/finality and registry-admission authority, then separately approve CDP permissions/credentials and a recovery policy. The unresolved dependency graph and upstream connection-safety/product-scope decision remain engineering/release blockers; they cannot be cleared by the local D1 observation journal. Keep payment and arbitrary upstream fulfillment disabled. No Git mutation, deployment, external RPC/CDP request, signing, spending, or phase transition occurred.
+
+## Deployed EndpointRegistry application integration — current continuation
+
+The owner has now supplied a successful Base Mainnet deployment at **`0xC4081a85935de1b9a929e5a6835d99471cd08c01`**, with Foundry cast confirming runtime Keccak **`0xaf2d51783c2f2d144c3913ed45661b328d1ef3661bb4db0668ec8568006d90df`**, matching the solc 0.8.38 release record. Earlier statements that no registry deployment exists are historical. This task did not repeat compiler comparisons or query a live RPC. Deployment transaction/block and explorer source verification were not supplied, so none is invented. `REGISTRY_DEPLOYMENT.json` preserves the supplied evidence separately from the reproducible predeployment artifact record.
+
+The server-owned `server/registry/status.ts` pins that identity and exposes authenticated GET-only `/api/registry`, optionally filtered by an owned `resourceId`. Missing RPC configuration, bad chain/code/CHAIN_ID, stale or inconsistent blocks, RPC failure, binding commitment/owner/version/price/payout mismatch, pending transfer, disable, conflict, or revision/generation changes cannot produce an admitted registration. The handler uses existing viem ABI/hash functions, prepared ownership-filtered D1 reads, a server-only explicit HTTPS RPC endpoint, no redirects/retries/fallback, bounded response streaming and an abort deadline. Requests carry only fixed RPC method parameters. No buyer headers or secrets are forwarded. Canonical finalized identity is rechecked; resource head configuration must match. This is provider observation, never independent consensus proof or production evidence admission.
+
+The dashboard offers explicit read controls per merchant and resource, loading/error states, owner-verified deployment identity, runtime observation, resource status and unverified explorer status. Missing bindings show no registered claim. A matching resource observation is labelled `matching_observation_only`; it does not write `onchain_confirmed`, receipts, analytics or payment phases. Public payment routing and arbitrary upstream transport remain disabled. Migrations 0006/0007 and settlement-review changes are preserved; no new migration or remote application is needed for this code.
+
+Local tests extend native workerd/D1 fixtures with the exact release bytecode, wrong chain/code/CHAIN_ID and stale-block rejection, matching/unregistered/mismatched owned resources, unchanged unconfirmed bindings and disabled admission. Authenticated API tests also cover missing RPC configuration, unauthenticated access and cross-merchant denial. All network responses are local mocks. Final verification results are recorded below after completion.
+
+Files added in this continuation: `server/registry/status.ts`, `src/sg03/RegistryStatus.tsx`, `docs/REGISTRY_DEPLOYMENT.json`. Files modified: `server/sg03/api.ts`, `src/sg03/Workspace.tsx`, `tests/release-security/handler.ts`, `tests/release-security/run.mjs`, `tests/sg03/run.mjs`, `docs/ENVIRONMENT.md`, `docs/RELEASE_CHECKLIST.md`, `docs/SG-07_LAUNCH_RUNBOOK.md`, `docs/SG-07_REMEDIATION_REPORT.md`. Previously uncommitted migration 0007, settlement review and test-runner updates remain intact.
+
+**SG-07 remains IN PROGRESS; launch remains BLOCKED.** Next owner decisions are the approved read-only RPC provider and production observation policy, genuine deployment transaction/block and explorer verification evidence, and the separately reviewed admission authority. CDP/Zod/minimatch dependency remediation, settlement reconciliation/admission, trusted operational time/recovery, secure upstream architecture, and production migration approvals remain separate gates. Contract deployment alone does not clear them. No deployment, signing, spending, real payment, production mutation or Git mutation occurred here.
+
+Verification for deployed-registry integration:
+
+| Command                                                                            | Exit / actual result                                                                                                                                                |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                                                                         | 0; 398 checks (17 foundation, 14 compatibility, 14 SG-03, 122 SG-05, 20 SG-06, 72 SG-07, 43 registry admission, 32 upstream, 64 release security)                   |
+| `npm run test:release-security`                                                    | 0; final 64 native workerd/D1 checks after canonical recheck and actual `ResourceNotFound(bytes32)` revert handling refinements                                     |
+| `npm run test:sg03`                                                                | 0; 14 checks, including final Chromium registry control click and honest missing-provider/source-verification state, authenticated API and cross-merchant rejection |
+| `npm run build`, `npm run lint`, `npm run format:check`, `npm run build:functions` | 0                                                                                                                                                                   |
+| `npm run check:bundle-boundary`                                                    | 0; 463 Functions inputs, 1,781 browser inputs; payment/test SDK/Zod/minimatch boundary preserved                                                                    |
+| `forge fmt --check`, `forge build`, `forge test -vvv`                              | 0; 47 tests passed, 0 failed/skipped; no compiler comparison or deployment                                                                                          |
+| `npm audit`, `npm audit --omit=dev`                                                | 1; 5 high + 12 moderate / 5 high respectively; no dependency changes or suppression                                                                                 |
+| `git diff --check`                                                                 | 0                                                                                                                                                                   |
+
+Resolved development failures: the initial TypeScript compile required the installed Workers TextDecoder `ignoreBOM` option; the local authenticated fixture initially supplied a nonconforming cookie token; the new Chromium locator initially matched multiple cards and was scoped to the final merchant deployment card. All were corrected and their affected checks rerun successfully. No assertions establishing ownership, runtime identity, registration status, admission denial, or payment isolation were removed. Full aggregate regression passed before the final narrow canonical/revert refinements; final targeted registry, D1/browser and build checks cover those refinements. Evidence logs are local ignored `.wrangler/deployed-registry-*` artifacts. All twelve review archives and prior local changes remain preserved.

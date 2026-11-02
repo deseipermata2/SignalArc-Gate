@@ -1,0 +1,14 @@
+{
+  "contract": "EndpointRegistry",
+  "chainId": 8453,
+  "address": "0xC4081a85935de1b9a929e5a6835d99471cd08c01",
+  "runtimeKeccak256": "0xaf2d51783c2f2d144c3913ed45661b328d1ef3661bb4db0668ec8568006d90df",
+  "compiler": "0.8.38",
+  "evidenceSource": "owner-supplied deployment and Foundry cast runtime-hash verification",
+  "independentlyReadInThisTask": false,
+  "deploymentTransaction": null,
+  "deploymentBlock": null,
+  "explorerSourceVerification": "unverified",
+  "resourceRegistrationConfirmed": false,
+  "productionPaymentsEnabled": false
+}

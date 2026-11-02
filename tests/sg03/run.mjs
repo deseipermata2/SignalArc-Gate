@@ -97,6 +97,7 @@ try {
       '0004_sg07_registry_review.sql',
       '0005_sg07_persistent_quarantine.sql',
       '0006_sg07_api_budget.sql',
+      '0007_sg07_settlement_observations.sql',
     ],
     localOnly: true,
   })
@@ -124,6 +125,7 @@ try {
     'HTTPS configuration uses Secure HttpOnly Strict __Host cookies and refuses public HTTP (local policy check, not a deployed HTTPS flow)',
   )
   await expect(alice, '/api/resources', 401)
+  await expect(alice, '/api/registry', 401)
   await expect(alice, '/api/auth/nonce', 422, 'POST', {
     address: aliceAccount.address,
     chainId: 0,
@@ -332,7 +334,16 @@ try {
     network: 'eip155:8453',
     enabled: true,
   }
+  const registry = await expect(alice, '/api/registry', 200)
+  assert.equal(
+    registry.body.address,
+    '0xC4081a85935de1b9a929e5a6835d99471cd08c01',
+  )
+  assert.equal(registry.body.paymentsEnabled, false)
+  assert.equal(registry.body.runtimeObservation, 'unavailable')
+  assert.equal(registry.body.explorerVerification, 'unverified')
   const created = await expect(alice, '/api/resources', 201, 'POST', input)
+  await expect(bob, '/api/registry?resourceId=' + created.body.resource.id, 404)
   const resource = created.body.resource
   assert.deepEqual(
     { ...resource, id: undefined, createdAt: undefined, updatedAt: undefined },
@@ -680,6 +691,19 @@ try {
   )
   assert.equal(browserDisabled.enabled, 0)
   assert.equal(browserDisabled.price_atomic, '1')
+  await page
+    .getByRole('button', { name: 'Read deployed registry status', exact: true })
+    .last()
+    .click()
+  await page
+    .getByText('Server registry RPC is not configured', { exact: true })
+    .waitFor()
+  await page
+    .getByText(
+      'Deployment: owner-verified. Explorer source verification: unverified.',
+      { exact: true },
+    )
+    .waitFor()
   await page.screenshot({ path: '.wrangler/sg03-desktop.png', fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
   assert.equal(

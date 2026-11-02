@@ -18,6 +18,7 @@ import {
 } from '@tanstack/react-query'
 import { walletConfig } from './wallet'
 import Activity from '../sg06/Activity'
+import RegistryStatus from './RegistryStatus'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -442,6 +443,10 @@ function Manager() {
                     </CardHeader>
                     <CardContent className="space-y-3 text-sm">
                       <p className="break-all">{resource.upstreamUrl}</p>
+                      <RegistryStatus
+                        key={merchant.id + resource.id + resource.updatedAt}
+                        resourceId={resource.id}
+                      />
                       <dl className="space-y-2">
                         <div>
                           <dt className="text-xs text-muted-foreground">
@@ -496,6 +501,7 @@ function Manager() {
             </div>
           </section>
         )}
+        {merchant && <RegistryStatus key={merchant.id} />}
         {merchant && (
           <Activity
             key={merchant.id}

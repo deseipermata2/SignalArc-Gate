@@ -96,11 +96,119 @@ async function invoke(action, mode, extra = {}) {
 try {
   assert.equal(
     (await runtime.control('migrate')).applied.at(-1),
-    '0006_sg07_api_budget.sql',
+    '0007_sg07_settlement_observations.sql',
   )
   assert.equal((await runtime.control('migrate')).applied.length, 0)
   pass(
-    'six forward migrations apply in real local D1 and repeat with matching historical digests',
+    'seven forward migrations apply in real local D1 and repeat with matching historical digests',
+  )
+  const artifact = JSON.parse(
+    await readFile(
+      join(root, 'contracts/out/EndpointRegistry.sol/EndpointRegistry.json'),
+      'utf8',
+    ),
+  )
+  const deployed = await invoke('deployed-registry', 'ok', {
+    runtime: artifact.deployedBytecode.object,
+  })
+  assert.equal(deployed.status, 200, JSON.stringify(deployed.body))
+  for (const mode of [
+    'wrong-chain',
+    'bad-code',
+    'bad-contract-chain',
+    'stale',
+  ]) {
+    assert.equal(
+      (
+        await invoke('deployed-registry', mode, {
+          runtime: artifact.deployedBytecode.object,
+        })
+      ).status,
+      503,
+    )
+  }
+  pass(
+    'deployed registry identity validates Base chain, exact release runtime and CHAIN_ID with stale/mismatched fixture rejection',
+  )
+  for (const [mode, expected] of [
+    ['ok', 'matching_observation_only'],
+    ['unregistered', 'not_registered'],
+    ['mismatch', 'mismatch'],
+  ]) {
+    const result = await invoke('deployed-resource', mode, {
+      runtime: artifact.deployedBytecode.object,
+    })
+    assert.equal(result.status, 200, JSON.stringify(result.body))
+    assert.equal(
+      result.body.status.resourceStatus,
+      expected,
+      JSON.stringify(result.body),
+    )
+    assert.equal(result.body.source.source, 'unconfirmed')
+    assert.equal(result.body.status.productionAdmitted, false)
+  }
+  pass(
+    'authenticated D1 resource observations distinguish matching, unregistered and mismatched state without confirming bindings',
+  )
+  const review = await invoke('settlement-review', 'ok')
+  assert.equal(review.status, 200, JSON.stringify(review.body))
+  assert.equal(review.body.review.outcome, 'rpc_observation_only')
+  assert.equal(review.body.review.productionAdmitted, false)
+  assert.equal(review.body.review.localSimulationOnly, true)
+  assert.equal(review.body.review.persisted, true)
+  assert.deepEqual(review.body.attempt, {
+    phase: 'settlement_unknown',
+    evidence_kind: 'local_simulation',
+  })
+  assert.equal(review.body.receipts.n, 0)
+  assert.equal(review.body.rows.results.length, 1)
+  assert.equal(review.body.rows.results[0].provenance, 'local_simulation')
+  assert.equal(
+    JSON.parse(review.body.rows.results[0].evidence_json).provenance,
+    'LOCAL SIMULATION ONLY',
+  )
+  pass(
+    'native D1 reconciliation journal persists a validated observer report without changing unknown payment state or creating a receipt',
+  )
+  const duplicate = await invoke('settlement-review', 'ok')
+  assert.equal(duplicate.body.review.persisted, false)
+  assert.equal(duplicate.body.review.outcome, 'rpc_observation_only')
+  assert.equal(duplicate.body.rows.results.length, 1)
+  const wrongMerchant = await invoke('settlement-review', 'wrong-merchant')
+  assert.equal(wrongMerchant.status, 503)
+  assert.equal(wrongMerchant.body.review, undefined)
+  pass(
+    'reconciliation review is idempotent for identical evidence and enforces server-supplied merchant ownership',
+  )
+  for (const mode of ['forged-authority', 'wrong-amount-observation']) {
+    const rejected = await invoke('settlement-review', mode)
+    assert.equal(rejected.status, 503)
+    assert.equal(rejected.body.rows.n, 1)
+    pass(
+      'reconciliation rejects ' +
+        mode +
+        ' without appending evidence or changing payment state',
+    )
+  }
+  const immutable = await invoke('settlement-review', 'tamper')
+  assert.equal(immutable.body.updateBlocked, true)
+  assert.equal(immutable.body.deleteBlocked, true)
+  assert.equal(immutable.body.count.n, 1)
+  pass('durable settlement observations are append-only in local D1')
+  const conflict = await invoke('settlement-review', 'second-transaction')
+  assert.equal(conflict.status, 200, JSON.stringify(conflict.body))
+  assert.equal(conflict.body.review.outcome, 'conflict')
+  assert.equal(conflict.body.rows.results.length, 2)
+  assert.ok(
+    conflict.body.rows.results.every(
+      (row) =>
+        row.outcome === 'rpc_observation_only' || row.outcome === 'conflict',
+    ),
+  )
+  assert.equal(conflict.body.attempt.phase, 'settlement_unknown')
+  assert.equal(conflict.body.receipts.n, 0)
+  pass(
+    'conflicting local observations append conflict evidence and remain non-authoritative without settling or releasing content',
   )
   const good = await invoke('evidence', 'ok')
   assert.equal(good.status, 200, JSON.stringify(good.body))

@@ -3,6 +3,7 @@ import { apiConfig, apiError, HttpError, requireCsrf } from './http'
 import { resources } from './resources'
 import { reporting } from '../sg06/reporting'
 import { takeApiBudget } from './budget'
+import { registryStatus } from '../registry/status'
 
 export async function handleApi(
   request: Request,
@@ -27,6 +28,7 @@ export async function handleApi(
         '/api/auth/session',
         '/api/auth/logout',
         '/api/resources',
+        '/api/registry',
       ].includes(path) ||
       /^\/api\/reporting\/(attempts|receipts|summary)$/.test(path) ||
       /^\/api\/resources\/[^/]+$/.test(path)
@@ -36,6 +38,8 @@ export async function handleApi(
       throw new HttpError(405, 'Method not allowed')
     if (request.method !== 'GET') requireCsrf(request, config)
     await takeApiBudget(config.db, Date.now())
+    if (path === '/api/registry')
+      return await registryStatus(request, config, env)
     if (path === '/api/auth/nonce' && request.method === 'POST')
       return await nonce(request, config)
     if (path === '/api/auth/verify' && request.method === 'POST')

@@ -1,17 +1,32 @@
+import {
+  registryStatus,
+  abi as deployedAbi,
+  deployment,
+  readDeployment,
+} from '../../server/registry/status'
 import { walletAddress } from '../../shared/resources'
 import { localSettlementFields } from '../../server/sg05/protocol'
 import { takeApiBudget } from '../../server/sg03/budget'
-import { readJson, HttpError } from '../../server/sg03/http'
+import { apiConfig, readJson, HttpError } from '../../server/sg03/http'
 import {
   createSettlementObserver,
   usdcEvidenceAbi,
   type SettlementExpectation,
 } from '../../server/sg07/settlement-evidence'
 import { createReadRpc } from '../../server/sg07/rpc'
+import { reviewUnknownSettlement } from '../../server/sg07/settlement-review'
+import { PaymentStore } from '../../server/sg05/store'
 import { hash } from '../../server/sg03/http'
 import { canonical, GatewayError } from '../../server/sg05/bounds'
-import { NETWORK, USDC } from '../../server/sg05/registry'
 import {
+  commitment,
+  resourceId,
+  NETWORK,
+  USDC,
+} from '../../server/sg05/registry'
+import {
+  keccak256,
+  toHex,
   encodeFunctionData,
   encodeFunctionResult,
   encodeEventTopics,
@@ -28,6 +43,9 @@ const nonce = ('0x' + '11'.repeat(32)) as Hex
 const txHash = '0x' + '22'.repeat(32)
 const blockHash = '0x' + '33'.repeat(32)
 const finalHash = '0x' + '44'.repeat(32)
+const reviewMerchantId = '10000000-0000-4000-8000-000000000001'
+const reviewResourceId = '20000000-0000-4000-8000-000000000001'
+const reviewAttemptId = '30000000-0000-4000-8000-000000000001'
 export async function onRequest({
   request,
   env,
@@ -53,11 +71,175 @@ export async function onRequest({
     signature: string
     mode: string
     action: string
+    runtime?: string
     time?: number
   }
   const signer = walletAddress(body.payer)
   let calls = 0
   try {
+    if (body.action === 'deployed-resource') {
+      const mid = '50000000-0000-4000-8000-000000000001',
+        rid = '60000000-0000-4000-8000-000000000001',
+        salt = '0x' + '66'.repeat(32)
+      const chainId = resourceId(signer, rid),
+        configHash = commitment(
+          chainId,
+          'https://fixture.invalid/json',
+          4096,
+          salt,
+        )
+      await db.batch([
+        db
+          .prepare('INSERT OR IGNORE INTO merchants VALUES (?,?,?,?)')
+          .bind(mid, payee, now, now),
+        db
+          .prepare(
+            'INSERT OR IGNORE INTO api_resources (id,merchant_id,name,upstream_url,response_config,price_atomic,payout_address,network,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+          )
+          .bind(
+            rid,
+            mid,
+            'Registry fixture',
+            'https://fixture.invalid/json',
+            JSON.stringify({
+              type: 'json',
+              maxBytes: 4096,
+              redirects: 'error',
+            }),
+            '1000',
+            payee,
+            NETWORK,
+            1,
+            now,
+            now,
+          ),
+        db
+          .prepare(
+            'INSERT OR IGNORE INTO sessions (token_hash,merchant_id,origin,chain_id,created_at,expires_at) VALUES (?,?,?,?,?,?)',
+          )
+          .bind(
+            await hash('ab'.repeat(32)),
+            mid,
+            url.origin,
+            8453,
+            Date.now(),
+            Date.now() + 60000,
+          ),
+        db
+          .prepare(
+            'INSERT OR IGNORE INTO resource_registry_bindings (resource_id,original_owner,onchain_resource_id,registry_address,config_salt,config_hash,registry_version,source,checked_at) VALUES (?,?,?,?,?,?,?,?,?)',
+          )
+          .bind(
+            rid,
+            signer,
+            chainId,
+            deployment.address,
+            salt,
+            configHash,
+            '1',
+            'unconfirmed',
+            now,
+          ),
+      ])
+      const req = new Request(url.origin + '/api/registry?resourceId=' + rid, {
+        headers: { Cookie: 'sg_session=' + 'ab'.repeat(32) },
+      })
+      let reads = 0
+      const response = await registryStatus(
+        req,
+        apiConfig(req, env),
+        { REGISTRY_RPC_URL: 'https://rpc.example.com' },
+        async (_input, init) => {
+          const request = JSON.parse(String(init?.body))
+          reads++
+          let result: unknown
+          if (request.method === 'eth_chainId') result = '0x2105'
+          else if (request.method === 'eth_getCode') result = body.runtime
+          else if (request.method === 'eth_getBlockByNumber')
+            result = {
+              number: '0x64',
+              hash: blockHash,
+              timestamp:
+                '0x' + BigInt(Math.floor(Date.now() / 1000) - 10).toString(16),
+            }
+          else if (String(request.params[0].data).length === 10)
+            result = encodeFunctionResult({
+              abi: deployedAbi,
+              functionName: 'CHAIN_ID',
+              result: 8453n,
+            })
+          else
+            result = encodeFunctionResult({
+              abi: deployedAbi,
+              functionName: 'getResource',
+              result: {
+                owner:
+                  body.mode === 'unregistered'
+                    ? '0x0000000000000000000000000000000000000000'
+                    : payee,
+                version: 1n,
+                enabled: true,
+                payout: payee,
+                priceAtomic: body.mode === 'mismatch' ? 1001n : 1000n,
+                configHash,
+                pendingOwner: '0x0000000000000000000000000000000000000000',
+              },
+            })
+          if (
+            body.mode === 'unregistered' &&
+            request.method === 'eth_call' &&
+            String(request.params[0].data).length > 10
+          )
+            return Response.json({
+              jsonrpc: '2.0',
+              id: request.id,
+              error: {
+                code: 3,
+                data:
+                  keccak256(toHex('ResourceNotFound(bytes32)')).slice(0, 10) +
+                  chainId.slice(2),
+              },
+            })
+          return Response.json({ jsonrpc: '2.0', id: request.id, result })
+        },
+      )
+      return Response.json({
+        status: await response.json(),
+        reads,
+        source: await db
+          .prepare(
+            'SELECT source FROM resource_registry_bindings WHERE resource_id=?',
+          )
+          .bind(rid)
+          .first(),
+      })
+    }
+    if (body.action === 'deployed-registry') {
+      const result = await readDeployment(async (method) => {
+        calls++
+        if (method === 'eth_chainId')
+          return body.mode === 'wrong-chain' ? '0x1' : '0x2105'
+        if (method === 'eth_getBlockByNumber')
+          return {
+            number: '0x64',
+            hash: '0x' + '33'.repeat(32),
+            timestamp:
+              '0x' +
+              BigInt(now / 1000 - (body.mode === 'stale' ? 1000 : 10)).toString(
+                16,
+              ),
+          }
+        if (method === 'eth_getCode')
+          return body.mode === 'bad-code' ? '0x00' : body.runtime
+        return (
+          '0x' +
+          BigInt(body.mode === 'bad-contract-chain' ? 1 : 8453)
+            .toString(16)
+            .padStart(64, '0')
+        )
+      }, now)
+      return Response.json({ result, calls })
+    }
     if (body.action === 'receipt')
       return Response.json(
         localSettlementFields({
@@ -350,6 +532,209 @@ export async function onRequest({
       },
       async () => (body.mode === 'clock-malformed' ? NaN : now),
     )
+    if (body.action === 'settlement-review') {
+      await db
+        .prepare(
+          'INSERT OR IGNORE INTO merchants (id,wallet_address,created_at,updated_at) VALUES (?,?,?,?)',
+        )
+        .bind(reviewMerchantId, signer.toLowerCase(), now, now)
+        .run()
+      await db
+        .prepare(
+          'INSERT OR IGNORE INTO api_resources (id,merchant_id,name,upstream_url,response_config,price_atomic,payout_address,network,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        )
+        .bind(
+          reviewResourceId,
+          reviewMerchantId,
+          'Local settlement evidence fixture',
+          'https://fixture.invalid/json',
+          JSON.stringify({ type: 'json', maxBytes: 4096, redirects: 'error' }),
+          '1000',
+          payee,
+          NETWORK,
+          1,
+          now,
+          now,
+        )
+        .run()
+      await db
+        .prepare(
+          `INSERT OR IGNORE INTO payment_attempts (
+            id,merchant_id,resource_id,idempotency_key,network,amount_atomic,status,
+            created_at,updated_at,phase,authorization_key,authorization_fingerprint,
+            buyer_address,asset,recipient,request_hash,url_hash,requirements_json,
+            snapshot_hash,config_revision,binding_generation,config_version,config_hash,
+            expires_at,operation_deadline,evidence_kind
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .bind(
+          reviewAttemptId,
+          reviewMerchantId,
+          reviewResourceId,
+          'local-settlement-review',
+          NETWORK,
+          '1000',
+          'pending',
+          now,
+          now,
+          'created',
+          e.authorizationKey,
+          e.authorizationFingerprint,
+          signer.toLowerCase(),
+          USDC,
+          payee,
+          'a'.repeat(64),
+          'b'.repeat(64),
+          '{}',
+          'c'.repeat(64),
+          1,
+          1,
+          '1',
+          'd'.repeat(64),
+          now + 60000,
+          now + 10000,
+          'local_simulation',
+        )
+        .run()
+      const phase = await db
+        .prepare('SELECT phase FROM payment_attempts WHERE id=?')
+        .bind(reviewAttemptId)
+        .first<{ phase: string }>()
+      if (phase?.phase === 'created')
+        await db.batch([
+          db
+            .prepare("UPDATE payment_attempts SET phase='verifying' WHERE id=?")
+            .bind(reviewAttemptId),
+          db
+            .prepare("UPDATE payment_attempts SET phase='verified' WHERE id=?")
+            .bind(reviewAttemptId),
+          db
+            .prepare(
+              "UPDATE payment_attempts SET phase='settlement_pending' WHERE id=?",
+            )
+            .bind(reviewAttemptId),
+          db
+            .prepare(
+              "UPDATE payment_attempts SET phase='settlement_unknown' WHERE id=?",
+            )
+            .bind(reviewAttemptId),
+        ])
+      const candidate =
+        body.mode === 'second-transaction' ? '0x' + '55'.repeat(32) : txHash
+      const reviewer =
+        body.mode === 'forged-authority'
+          ? async (expected: SettlementExpectation, transaction: string) => ({
+              ...(await observe(expected, transaction)),
+              productionAdmitted: true,
+            })
+          : body.mode === 'wrong-amount-observation'
+            ? async (expected: SettlementExpectation, transaction: string) => ({
+                ...(await observe(expected, transaction)),
+                amount: '1001',
+              })
+            : body.mode === 'second-transaction'
+              ? async (
+                  expected: SettlementExpectation,
+                  transaction: string,
+                ) => ({
+                  ...(await observe(expected, txHash)),
+                  transaction,
+                })
+              : observe
+      if (
+        body.mode === 'forged-authority' ||
+        body.mode === 'wrong-amount-observation'
+      ) {
+        try {
+          await reviewUnknownSettlement(
+            new PaymentStore(db, async () => now),
+            reviewMerchantId,
+            reviewAttemptId,
+            txHash,
+            reviewer,
+            async () => now,
+          )
+        } catch (error) {
+          return Response.json(
+            {
+              error: error instanceof GatewayError ? error.code : 'unavailable',
+              rows: await db
+                .prepare(
+                  'SELECT count(*) AS n FROM settlement_evidence_observations WHERE attempt_id=?',
+                )
+                .bind(reviewAttemptId)
+                .first(),
+            },
+            { status: 503 },
+          )
+        }
+      }
+      if (body.mode === 'tamper') {
+        let updateBlocked = false,
+          deleteBlocked = false
+        try {
+          await db
+            .prepare(
+              "UPDATE settlement_evidence_observations SET outcome='conflict' WHERE attempt_id=?",
+            )
+            .bind(reviewAttemptId)
+            .run()
+        } catch {
+          updateBlocked = true
+        }
+        try {
+          await db
+            .prepare(
+              'DELETE FROM settlement_evidence_observations WHERE attempt_id=?',
+            )
+            .bind(reviewAttemptId)
+            .run()
+        } catch {
+          deleteBlocked = true
+        }
+        return Response.json({
+          updateBlocked,
+          deleteBlocked,
+          count: await db
+            .prepare(
+              'SELECT count(*) AS n FROM settlement_evidence_observations WHERE attempt_id=?',
+            )
+            .bind(reviewAttemptId)
+            .first(),
+        })
+      }
+      const reviewed = await reviewUnknownSettlement(
+        new PaymentStore(db, async () => now),
+        body.mode === 'wrong-merchant'
+          ? '40000000-0000-4000-8000-000000000001'
+          : reviewMerchantId,
+        reviewAttemptId,
+        candidate,
+        reviewer,
+        async () => now,
+      )
+      return Response.json({
+        review: reviewed,
+        attempt: await db
+          .prepare(
+            'SELECT phase,evidence_kind FROM payment_attempts WHERE id=?',
+          )
+          .bind(reviewAttemptId)
+          .first(),
+        receipts: await db
+          .prepare(
+            'SELECT count(*) AS n FROM payment_receipts WHERE attempt_id=?',
+          )
+          .bind(reviewAttemptId)
+          .first(),
+        rows: await db
+          .prepare(
+            'SELECT outcome,transaction_hash,provenance,evidence_json FROM settlement_evidence_observations WHERE attempt_id=? ORDER BY rowid',
+          )
+          .bind(reviewAttemptId)
+          .all(),
+      })
+    }
     const result = await observe(
       e,
       body.mode === 'zero-hash' ? '0x' + '00'.repeat(32) : txHash,

@@ -85,6 +85,7 @@ try {
   assert.deepEqual((await runtime.control('migrate')).applied, [
     '0005_sg07_persistent_quarantine.sql',
     '0006_sg07_api_budget.sql',
+    '0007_sg07_settlement_observations.sql',
   ])
   assert.equal((await runtime.control('migrate')).applied.length, 0)
   const repaired = await inspect(legacyId)
