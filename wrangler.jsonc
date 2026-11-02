@@ -3,5 +3,22 @@
   "name": "signalarc-gate",
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-10-28",
-  "vars": { "BASE_CHAIN_ID": "8453" }
+  "vars": {
+    "BASE_CHAIN_ID": "8453"
+  },
+  "env": {
+    "production": {
+      "vars": {
+        "BASE_CHAIN_ID": "8453",
+        "APP_ORIGIN": "https://signalarc-gate.pages.dev"
+      },
+      "d1_databases": [
+        {
+          "binding": "SIGNALARC_DB",
+          "database_name": "signalarc-gate-db",
+          "database_id": "65878f5a-b1dc-4cde-8ac4-cbce8fc61dcd"
+        }
+      ]
+    }
+  }
 }
