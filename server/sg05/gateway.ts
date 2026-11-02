@@ -5,12 +5,13 @@ import {
 import type { PaymentRequirements, SettleResponse } from '@x402/core/types'
 import { clockTime, monotonicClock, type TrustedClock } from './clock'
 import { hash, randomToken } from '../sg03/http'
-import { deadline, GatewayError, reply } from './bounds'
+import { boundedJson, deadline, GatewayError, reply } from './bounds'
 import { snapshot, type RegistryReader, type Snapshot } from './registry'
 import {
   authorizationFresh,
   issuedResourceUrl,
   localProtocol,
+  localSettlementFields,
   payment,
   requirements,
   resourceInfo,
@@ -51,6 +52,17 @@ export function createLocalGateway(services: LocalServices) {
     try {
       const receipt = await store.receipt(a.id)
       if (!receipt) throw new GatewayError(503, 'settlement_record_unavailable')
+      const evidence = boundedJson(receipt.settlement_json) as SettleResponse
+      if (
+        !a.buyer_address ||
+        !validSettlement(
+          evidence,
+          a.buyer_address,
+          a.amount_atomic,
+          a.recipient,
+        )
+      )
+        throw new GatewayError(503, 'settlement_record_unavailable')
       const value = await protectedJson(s, upstream, clock)
       const final = await unchanged(a)
       if (!(await store.advance(a.id, 'fulfilling', 'fulfilled', null, final)))
@@ -60,7 +72,7 @@ export function createLocalGateway(services: LocalServices) {
         { localSimulationOnly: true, data: value },
         {
           'PAYMENT-RESPONSE': encodePaymentResponseHeader(
-            JSON.parse(receipt.settlement_json),
+            localSettlementFields(evidence),
           ),
         },
       )

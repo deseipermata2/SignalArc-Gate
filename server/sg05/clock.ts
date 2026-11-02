@@ -1,4 +1,4 @@
-import { GatewayError } from './bounds'
+import { deadline, GatewayError } from './bounds'
 /** Server-owned clock capability. The local fixture supplies its own loopback clock; callers cannot. */
 export type TrustedClock = () => Promise<number>
 export async function clockTime(read: TrustedClock): Promise<number> {
@@ -11,7 +11,7 @@ export async function clockTime(read: TrustedClock): Promise<number> {
 export function monotonicClock(read: TrustedClock): TrustedClock {
   let last = 0
   return async () => {
-    const now = await clockTime(read)
+    const now = await deadline(() => clockTime(read))
     if (now < last) throw new GatewayError(503, 'trusted_clock_unavailable')
     last = now
     return now

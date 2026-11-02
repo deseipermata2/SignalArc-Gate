@@ -7,7 +7,7 @@ import {
 } from 'viem'
 import { walletAddress, resourceInput } from '../../shared/resources'
 import { boundedJson, deadline, GatewayError } from '../sg05/bounds'
-import { clockTime, type TrustedClock } from '../sg05/clock'
+import { clockTime, monotonicClock, type TrustedClock } from '../sg05/clock'
 import { commitment, resourceId, USDC } from '../sg05/registry'
 
 // Read subset of the actual SG04 ABI. Tests compare it to the compiler artifact.
@@ -25,7 +25,12 @@ export interface RegistryPolicy {
   maxBlockAgeMs: number
 }
 export type ReadMethod =
-  'eth_chainId' | 'eth_getBlockByNumber' | 'eth_getCode' | 'eth_call'
+  | 'eth_chainId'
+  | 'eth_getBlockByNumber'
+  | 'eth_getCode'
+  | 'eth_call'
+  | 'eth_getTransactionReceipt'
+  | 'eth_getTransactionByHash'
 // Server-supplied capability only. No default RPC, environment lookup, signing or write methods.
 export type RegistryRpc = (
   method: ReadMethod,
@@ -101,13 +106,14 @@ export function validateRegistryPolicy(p: RegistryPolicy) {
 export function createRegistryReader(
   policy: RegistryPolicy,
   rpc: RegistryRpc,
-  clock: TrustedClock,
+  readClock: TrustedClock,
 ) {
+  const clock = monotonicClock(readClock)
   const p = validateRegistryPolicy(policy)
   return async (expected: ExpectedResource) => {
-    const started = await clockTime(clock)
     try {
       return await deadline(async (signal) => {
+        const started = await clockTime(clock)
         const call = async (method: ReadMethod, params: unknown[]) => {
           if (signal.aborted) fail()
           const result = await rpc(method, params, signal)
@@ -142,8 +148,10 @@ export function createRegistryReader(
           timestamp = finalized.timestamp * 1000n
         if (
           latest.number < finalized.number ||
+          latest.timestamp < finalized.timestamp ||
           latest.number - finalized.number + 1n < BigInt(p.minConfirmations) ||
           timestamp > now + 1000n ||
+          latest.timestamp * 1000n > now + 1000n ||
           now - timestamp > BigInt(p.maxBlockAgeMs)
         )
           fail('registry_not_final')
@@ -204,6 +212,35 @@ export function createRegistryReader(
           !state.enabled
         )
           fail('registry_configuration_mismatch')
+        // Finalized configuration cannot authorize payment if a known head change is not final yet.
+        const headRaw = await call('eth_call', [
+          {
+            to: p.address,
+            data: encodeFunctionData({
+              abi: registryAbi,
+              functionName: 'getResource',
+              args: [id],
+            }),
+          },
+          { blockHash: latest.hash, requireCanonical: true },
+        ])
+        if (
+          typeof headRaw !== 'string' ||
+          headRaw.toLowerCase() !== raw.toLowerCase()
+        )
+          fail('registry_unfinalized_configuration')
+        const headRecheck = block(
+          await call('eth_getBlockByNumber', [
+            `0x${latest.number.toString(16)}`,
+            false,
+          ]),
+        )
+        if (
+          headRecheck.hash !== latest.hash ||
+          headRecheck.number !== latest.number ||
+          headRecheck.timestamp !== latest.timestamp
+        )
+          fail('registry_reorg_uncertain')
         // Detect canonical hash movement during the read. No fallback to latest/number-only calls.
         const recheck = block(
           await call('eth_getBlockByNumber', [
@@ -245,13 +282,16 @@ export async function registryExpectation(
   const p = validateRegistryPolicy(policy)
   const row = await db
     .prepare(
-      `SELECT r.*, m.wallet_address AS current_owner, b.original_owner, b.onchain_resource_id, b.registry_address, b.config_salt, b.config_hash, b.registry_version, b.source, b.block_hash, b.block_number, b.checked_at FROM api_resources r JOIN merchants m ON m.id = r.merchant_id JOIN resource_registry_bindings b ON b.resource_id = r.id WHERE r.id = ?`,
+      `SELECT r.*, m.wallet_address AS current_owner, b.original_owner, b.onchain_resource_id, b.registry_address, b.config_salt, b.config_hash, b.registry_version, b.source, b.block_hash, b.block_number, b.checked_at, b.review_conflicted, b.review_code_hash, EXISTS(SELECT 1 FROM registry_evidence_journal j WHERE j.resource_id=r.id AND j.kind='observation' AND j.outcome='conflict') AS quarantined FROM api_resources r JOIN merchants m ON m.id = r.merchant_id JOIN resource_registry_bindings b ON b.resource_id = r.id WHERE r.id = ?`,
     )
     .bind(uuid)
     .first<Record<string, unknown>>()
   if (
     !row ||
     row.source !== 'onchain_confirmed' ||
+    row.review_conflicted !== 0 ||
+    row.quarantined !== 0 ||
+    row.review_code_hash !== p.runtimeCodeHash ||
     typeof row.registry_address !== 'string' ||
     row.registry_address.toLowerCase() !== p.address.toLowerCase() ||
     !hashPattern.test(String(row.block_hash)) ||

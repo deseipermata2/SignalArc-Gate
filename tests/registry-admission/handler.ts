@@ -483,18 +483,27 @@ export async function onRequest({
     if (body.mode === 'malformed') return null
     if (method === 'eth_chainId')
       return body.mode === 'wrong-chain' ? '0x1' : '0x2105'
-    if (method === 'eth_getBlockByNumber')
+    if (method === 'eth_getBlockByNumber') {
+      const latest =
+        params[0] === 'latest' ||
+        params[0] === '0x' + ((body.block ?? 100) + 2).toString(16)
       return {
-        number:
-          '0x' +
-          ((params[0] === 'latest' ? 2 : 0) + (body.block ?? 100)).toString(16),
-        hash: body.mode === 'conflict' ? '0x' + '33'.repeat(32) : blockHash,
+        number: '0x' + ((body.block ?? 100) + (latest ? 2 : 0)).toString(16),
+        hash: latest
+          ? '0x' + '66'.repeat(32)
+          : body.mode === 'conflict'
+            ? '0x' + '33'.repeat(32)
+            : blockHash,
         timestamp:
           '0x' +
           Math.floor(
-            (now - (body.mode === 'stale' ? 3601000 : 60000)) / 1000,
+            (now -
+              (body.mode === 'stale' ? 3601000 : 60000) +
+              (latest ? 4000 : 0)) /
+              1000,
           ).toString(16),
       }
+    }
     if (method === 'eth_getCode')
       return String(params[0]).toLowerCase() === policy.address.toLowerCase()
         ? code

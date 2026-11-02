@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.38;
 
 /// @title SignalArc Gate EndpointRegistry
 /// @notice Base Mainnet configuration/authorization registry. Never verifies or settles a payment.

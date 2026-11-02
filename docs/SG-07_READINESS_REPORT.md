@@ -1,5 +1,7 @@
 # SG-07 — Security remediation and pre-deployment readiness
 
+> Current checkpoint **08943d9**: the owner reports that the production control plane/domain smoke tests passed. Local configuration contains `APP_ORIGIN=https://gate.signalarc.fun` and the existing `SIGNALARC_DB` production binding. These settings were preserved; no external smoke test, DNS operation, deployment or remote migration was repeated here. Earlier statements below that domain/D1 setup has not occurred are historical and superseded by this owner-reported checkpoint. **Payments and production upstream fetching remain disabled.** See [current comprehensive evidence](SG-07_REMEDIATION_REPORT.md) and the [non-executing WSL procedure](SG-07_MANUAL_CONTRACT_DEPLOYMENT.md). SG-07 remains IN PROGRESS.
+
 **SG-07: IN PROGRESS. LOCAL READINESS PASS for the bounded components/test scope below. PRODUCTION READINESS BLOCKED. OWNER AUTHORIZATION REQUIRED for every launch/external action.** No phase completion or launch approval is inferred from tests.
 
 ## Baseline and inspection
@@ -197,3 +199,9 @@ The [settlement reliability report](SG-07_SETTLEMENT_RELIABILITY_REPORT.md) reco
 Production still has no payment/reconciliation route or trusted receipt admission. A facilitator report, mock ledger and local monotonic clock are not Mainnet proof. The installed SDK's higher-level pending-retry helper is not used by the direct-client gateway; real CDP durable idempotency/reconciliation has not been established. Paid-but-unfulfilled receipts are preserved without charging again; general delivery recovery/refunds remain owner policy and implementation blockers. SG-07 remains IN PROGRESS and production launch BLOCKED.
 
 Final settlement-continuation evidence: **325 application groups**, including **185 dedicated settlement groups**, and **47 Foundry tests** pass. Build/lint/format/Functions build and migration-history checks pass; audits still exit 1 at 5 high/12 moderate (production-only 5 high). Intermediate failures and two transient fixture failures with unproven root causes remain explicitly recorded in the settlement report. SG-07 and registry review fixtures now use a fixed local epoch; this is not deployed-clock proof. No public payment route was enabled.
+
+## Comprehensive local candidate at 08943d9
+
+See [complete remediation and current gate decisions](SG-07_REMEDIATION_REPORT.md). The real project now pins verified Solidity 0.8.38; the ABI/storage/runtime/creation code matches 0.8.28. A fresh-build release record and non-executing WSL guide are available. New read-only settlement observations check genuine EIP-712 authorization, token logs/nonce and canonical finality but **cannot admit a receipt or release content**. RPC/clock deadlines, explicit registry quarantine/code checks, bounded request parsing, provider-field filtering and a D1-backed global API budget are tested.
+
+Final local evidence: **390 application groups**, including **56 new release-security groups**, **47 Foundry tests**, build/lint/format/Functions/isolated artifact and bundle checks pass. Six migrations apply locally and repeat with matching history; new 0006 needs separate owner production approval. Audits still fail at **5 high + 12 moderate**, production-only **5 high**; no supported secure peer combination was found. Production settings/archives remain unchanged. Remaining production orchestration, trust, transport, recovery, clock and operational decisions are engineering/release blockers—not just deployment paperwork. **SG-07 IN PROGRESS; launch BLOCKED.**

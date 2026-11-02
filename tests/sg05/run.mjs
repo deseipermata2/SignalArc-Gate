@@ -248,7 +248,12 @@ const mock = createServer(async (req, res) => {
         network,
         payer: a.from,
         amount: reqs.amount,
-        extra: { localSimulationOnly: true, asset, recipient: reqs.payTo },
+        extra: {
+          localSimulationOnly: true,
+          asset,
+          recipient: reqs.payTo,
+          internalDiagnostic: 'LOCAL_PRIVATE_DIAGNOSTIC',
+        },
       }
       lastTransaction = transaction
       ledger.set(key, {
@@ -551,6 +556,7 @@ try {
     '0003_sg06_reporting_indexes.sql',
     '0004_sg07_registry_review.sql',
     '0005_sg07_persistent_quarantine.sql',
+    '0006_sg07_api_budget.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   assert.equal(
@@ -610,6 +616,7 @@ try {
   conflictTransaction = evidence.transaction
   assert.equal(evidence.success, true)
   assert.equal(evidence.extra.localSimulationOnly, true)
+  assert.equal(evidence.extra.internalDiagnostic, undefined)
   assert.equal(evidence.extra.asset, asset)
   assert.equal(evidence.extra.recipient, t.challenge.accepts[0].payTo)
   assert.deepEqual(JSON.parse((await receipts(t))[0].settlement_json), evidence)

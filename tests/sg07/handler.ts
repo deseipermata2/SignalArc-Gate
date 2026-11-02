@@ -116,17 +116,27 @@ export async function onRequest({
           if (method === 'eth_chainId')
             result = body.mode === 'wrong-chain' ? '0x1' : '0x2105'
           else if (method === 'eth_getBlockByNumber') {
-            const latest = params[0] === 'latest'
+            const latest = params[0] === 'latest' || params[0] === '0x66'
             result = {
               number: latest ? '0x66' : '0x64',
               hash:
                 body.mode === 'reorg' && params[0] === '0x64'
                   ? '0x' + '33'.repeat(32)
-                  : blockHash,
+                  : body.mode === 'head-reorg' && params[0] === '0x66'
+                    ? '0x' + '77'.repeat(32)
+                    : latest
+                      ? '0x' + '66'.repeat(32)
+                      : blockHash,
               timestamp:
                 '0x' +
                 Math.floor(
-                  (now - (body.mode === 'stale-block' ? 3601000 : 60000)) /
+                  (now -
+                    (body.mode === 'stale-block' ? 3601000 : 60000) +
+                    (latest
+                      ? body.mode === 'head-future-time'
+                        ? 65000
+                        : 4000
+                      : 0)) /
                     1000,
                 ).toString(16),
             }
@@ -137,7 +147,9 @@ export async function onRequest({
               (result as Record<string, unknown>).number = '0x00'
           } else {
             if (
-              params[1].blockHash !== blockHash ||
+              ![blockHash, '0x' + '66'.repeat(32)].includes(
+                params[1].blockHash,
+              ) ||
               params[1].requireCanonical !== true
             )
               throw Error('Unpinned read')
@@ -162,17 +174,41 @@ export async function onRequest({
                 })
               )
                 throw Error('Wrong resource identity')
+              const atHead = params[1].blockHash === '0x' + '66'.repeat(32)
               result = encodeFunctionResult({
                 abi: registryAbi,
                 functionName: 'getResource',
                 result: {
-                  owner: body.mode === 'transferred' ? USDC : addr,
-                  pendingOwner: body.mode === 'pending-transfer' ? USDC : zero,
-                  version: body.mode === 'stale-version' ? 2n : 1n,
-                  enabled: body.mode !== 'disabled-chain',
-                  payout: body.mode === 'wrong-payout' ? USDC : addr,
-                  priceAtomic: body.mode === 'wrong-price' ? 1001n : 1000n,
-                  configHash: (body.mode === 'wrong-hash'
+                  owner:
+                    body.mode === 'transferred' ||
+                    (atHead && body.mode === 'head-transfer')
+                      ? USDC
+                      : addr,
+                  pendingOwner:
+                    body.mode === 'pending-transfer' ||
+                    (atHead && body.mode === 'head-pending')
+                      ? USDC
+                      : zero,
+                  version:
+                    body.mode === 'stale-version' ||
+                    (atHead && body.mode === 'head-version')
+                      ? 2n
+                      : 1n,
+                  enabled:
+                    body.mode !== 'disabled-chain' &&
+                    !(atHead && body.mode === 'head-disabled'),
+                  payout:
+                    body.mode === 'wrong-payout' ||
+                    (atHead && body.mode === 'head-payout')
+                      ? USDC
+                      : addr,
+                  priceAtomic:
+                    body.mode === 'wrong-price' ||
+                    (atHead && body.mode === 'head-price')
+                      ? 1001n
+                      : 1000n,
+                  configHash: (body.mode === 'wrong-hash' ||
+                  (atHead && body.mode === 'head-hash')
                     ? '0x' + '44'.repeat(32)
                     : hash) as Hex,
                 },

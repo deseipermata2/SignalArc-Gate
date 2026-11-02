@@ -127,6 +127,7 @@ try {
     '0003_sg06_reporting_indexes.sql',
     '0004_sg07_registry_review.sql',
     '0005_sg07_persistent_quarantine.sql',
+    '0006_sg07_api_budget.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   for (const [name, digest] of historical)

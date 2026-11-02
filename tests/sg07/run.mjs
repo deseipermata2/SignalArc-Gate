@@ -41,7 +41,7 @@ try {
   assert.equal(good.body.result.evidence, 'rpc_observation_only')
   assert.equal(good.body.result.priceAtomic, '1000')
   assert.equal(good.body.result.blockNumber, '100')
-  assert.equal(good.body.calls, 7)
+  assert.equal(good.body.calls, 9)
   pass(
     'Base-only read adapter validates code hash, ABI, owner-namespaced identity and finalized hash-pinned consistent resource state in workerd',
   )
@@ -70,6 +70,15 @@ try {
     'wrong-hash',
     'bad-abi',
     'reorg',
+    'head-disabled',
+    'head-transfer',
+    'head-pending',
+    'head-price',
+    'head-payout',
+    'head-version',
+    'head-hash',
+    'head-reorg',
+    'head-future-time',
     'timeout',
     'hung',
     'http',

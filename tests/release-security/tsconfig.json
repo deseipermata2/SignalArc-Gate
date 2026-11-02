@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.functions.json",
+  "compilerOptions": { "incremental": false },
+  "include": ["handler.ts", "../../server"]
+}

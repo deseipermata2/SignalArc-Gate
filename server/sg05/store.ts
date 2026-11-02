@@ -2,7 +2,7 @@ import type { PaymentRequirements, SettleResponse } from '@x402/core/types'
 import { GatewayError } from './bounds'
 import { clockTime, monotonicClock, type TrustedClock } from './clock'
 import { NETWORK, USDC, type Snapshot } from './registry'
-import { validSettlement } from './protocol'
+import { localSettlementFields, validSettlement } from './protocol'
 export type Phase =
   | 'created'
   | 'rejected'
@@ -202,10 +202,7 @@ export class PaymentStore {
           a.authorization_key,
           a.config_version,
           a.config_hash,
-          JSON.stringify({
-            ...result,
-            extra: { ...result.extra, localSimulationOnly: true },
-          }),
+          JSON.stringify(localSettlementFields(result)),
           a.id,
           a.id,
         ),

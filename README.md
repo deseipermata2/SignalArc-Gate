@@ -68,3 +68,7 @@ Session cookies are HttpOnly/SameSite=Strict, and Secure with `__Host-` names ov
 Zod **GHSA-mrhx-c7xc-m3w5** and tooling dependency findings remain open; see the fresh evidence in the SG-06 report. Input limits are mitigation, not a dependency fix. Do not use forced audit repairs or unsupported overrides. This project has not received an independent security audit and is not approved for production payments.
 
 All Git mutations, publishing, deployments, account/DNS changes and spending remain the owner's responsibility. No phase is automatically marked complete.
+
+## Current SG-07 review candidate
+
+Owner-confirmed checkpoint `08943d9` uses `https://gate.signalarc.fun` for the deployed control plane. This local continuation preserves production configuration and does not redeploy or repeat DNS setup. Payment execution and real upstream fulfillment remain disabled. See the [comprehensive SG-07 review](docs/SG-07_REMEDIATION_REPORT.md), [reproducible contract record](docs/CONTRACT_RELEASE.json) and [non-executing manual WSL preparation](docs/SG-07_MANUAL_CONTRACT_DEPLOYMENT.md). SG-07 is IN PROGRESS; production launch remains BLOCKED.

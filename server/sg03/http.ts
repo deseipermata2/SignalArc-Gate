@@ -105,26 +105,37 @@ export async function hash(value: string) {
     byte.toString(16).padStart(2, '0'),
   ).join('')
 }
-export async function readJson(request: Request) {
+export async function readJson(request: Request, timeoutMs = 5000) {
   const maxBytes = 16384
-  if (Number(request.headers.get('Content-Length') ?? '0') > maxBytes)
+  const length = request.headers.get('Content-Length')
+  if (length !== null && !/^(?:0|[1-9]\d{0,6})$/.test(length))
+    throw new HttpError(400, 'Invalid Content-Length')
+  if (Number(length ?? '0') > maxBytes)
     throw new HttpError(413, 'Request body exceeds 16 KiB')
   if (!request.body) throw new HttpError(400, 'JSON body required')
   const reader = request.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new HttpError(408, 'Request body deadline exceeded'))
+      void reader.cancel().catch(() => {})
+    }, timeoutMs)
+  })
   try {
     for (;;) {
-      const { done, value } = await reader.read()
+      const { done, value } = await Promise.race([reader.read(), timeout])
       if (done) break
       size += value.byteLength
       if (size > maxBytes) {
-        await reader.cancel()
+        void reader.cancel().catch(() => {})
         throw new HttpError(413, 'Request body exceeds 16 KiB')
       }
       chunks.push(value)
     }
   } finally {
+    clearTimeout(timer!)
     reader.releaseLock()
   }
   const bytes = new Uint8Array(size)
@@ -151,7 +162,24 @@ export async function readJson(request: Request) {
         if (++depth > 8) throw new HttpError(413, 'JSON nesting exceeds limit')
       } else if (char === '}' || char === ']') depth--
     }
-    return JSON.parse(text) as unknown
+    const value: unknown = JSON.parse(text)
+    let nodes = 0
+    const walk = (item: unknown) => {
+      if (++nodes > 1024)
+        throw new HttpError(413, 'JSON structure exceeds limit')
+      if (item && typeof item === 'object') {
+        const entries = Object.entries(item)
+        if (entries.length > 64)
+          throw new HttpError(413, 'JSON collection exceeds limit')
+        for (const [key, child] of entries) {
+          if (key.length > 128)
+            throw new HttpError(413, 'JSON key exceeds limit')
+          walk(child)
+        }
+      }
+    }
+    walk(value)
+    return value
   } catch (error) {
     if (error instanceof HttpError) throw error
     throw new HttpError(400, 'Malformed JSON body')

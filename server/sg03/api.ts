@@ -2,6 +2,7 @@ import { currentSession, logout, nonce, verify } from './auth'
 import { apiConfig, apiError, HttpError, requireCsrf } from './http'
 import { resources } from './resources'
 import { reporting } from '../sg06/reporting'
+import { takeApiBudget } from './budget'
 
 export async function handleApi(
   request: Request,
@@ -34,6 +35,7 @@ export async function handleApi(
     if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(request.method))
       throw new HttpError(405, 'Method not allowed')
     if (request.method !== 'GET') requireCsrf(request, config)
+    await takeApiBudget(config.db, Date.now())
     if (path === '/api/auth/nonce' && request.method === 'POST')
       return await nonce(request, config)
     if (path === '/api/auth/verify' && request.method === 'POST')

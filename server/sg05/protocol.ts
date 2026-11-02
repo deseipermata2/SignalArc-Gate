@@ -2,7 +2,11 @@ import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { PaymentPayloadSchema } from '@x402/core/schemas'
 import { decodePaymentSignatureHeader } from '@x402/core/http'
-import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
+import type {
+  PaymentPayload,
+  PaymentRequirements,
+  SettleResponse,
+} from '@x402/core/types'
 import { createCdpFacilitatorClient } from '@coinbase/cdp-sdk/x402'
 import { walletAddress } from '../../shared/resources'
 import { hash } from '../sg03/http'
@@ -206,4 +210,24 @@ export function validSettlement(
       (typeof extra.recipient === 'string' &&
         extra.recipient.toLowerCase() === recipient.toLowerCase()))
   )
+}
+
+/** Local receipt/header projection. No provider diagnostics, bearer data or production authority. */
+export function localSettlementFields(result: SettleResponse) {
+  return {
+    success: result.success,
+    transaction: result.transaction,
+    network: result.network,
+    payer: result.payer,
+    ...(result.amount === undefined ? {} : { amount: result.amount }),
+    extra: {
+      ...(result.extra?.asset === undefined
+        ? {}
+        : { asset: result.extra.asset }),
+      ...(result.extra?.recipient === undefined
+        ? {}
+        : { recipient: result.extra.recipient }),
+      localSimulationOnly: true,
+    },
+  }
 }

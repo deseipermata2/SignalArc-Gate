@@ -14,7 +14,7 @@
     "test:foundation": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs",
     "test:d1": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs --d1-only",
     "test:ui": "node tests/foundation/run.mjs --ui-only",
-    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03 && npm run test:sg05 && npm run test:sg06 && npm run test:sg07 && npm run test:registry-admission && npm run test:upstream-security",
+    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03 && npm run test:sg05 && npm run test:sg06 && npm run test:sg07 && npm run test:registry-admission && npm run test:upstream-security && npm run test:release-security",
     "test:settlement-reliability": "npm run test:sg05 && npm run test:sg07",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -24,7 +24,10 @@
     "test:sg06": "tsc -p tests/sg06/tsconfig.json && node tests/sg06/run.mjs",
     "test:sg07": "tsc -p tests/sg07/tsconfig.json && node tests/sg07/run.mjs",
     "test:registry-admission": "tsc -p tests/registry-admission/tsconfig.json && node tests/registry-admission/run.mjs",
-    "test:upstream-security": "tsc -p tests/upstream-security/tsconfig.json && node tests/upstream-security/run.mjs"
+    "test:upstream-security": "tsc -p tests/upstream-security/tsconfig.json && node tests/upstream-security/run.mjs",
+    "test:release-security": "tsc -p tests/release-security/tsconfig.json && node tests/release-security/run.mjs",
+    "check:contract-release": "node scripts/contract-release.mjs --check",
+    "check:bundle-boundary": "node scripts/dependency-exposure.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "1.60.0",

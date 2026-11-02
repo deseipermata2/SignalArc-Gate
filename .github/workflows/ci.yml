@@ -34,7 +34,11 @@ jobs:
       - run: npm test
         env:
           FOUNDRY_OFFLINE: 'false'
+      - run: npm run check:contract-release
+        env:
+          FOUNDRY_OFFLINE: 'false'
       - run: npm run build:functions
+      - run: npm run check:bundle-boundary
 
   dependency-audit:
     # Kept visible and failing while the known upstream Zod advisory is unresolved.
@@ -50,6 +54,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm audit
+      - run: npm audit --omit=dev
+        if: ${{ !cancelled() }}
 
   contracts:
     runs-on: ubuntu-latest
@@ -69,6 +75,6 @@ jobs:
           version: v1.5.1
       - run: forge --version
       - run: forge fmt --check
-      - run: forge build
+      - run: forge build --sizes
       - run: forge test -vvv
       - run: forge test --gas-report

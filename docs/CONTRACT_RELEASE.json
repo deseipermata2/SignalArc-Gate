@@ -1,0 +1,761 @@
+{
+  "schema": 1,
+  "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+  "chainId": 8453,
+  "constructorArguments": [],
+  "productionDeploymentApproved": false,
+  "compiler": "0.8.38+commit.1835d247",
+  "linuxCompilerSha256": "65c3180a336eabb6bdc4bbd49cc405aeb233976964ae6c11fba2a6c8be8f3243",
+  "compilerManifest": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/linux-amd64/list.json",
+  "settings": {
+    "compilationTarget": {
+      "src/EndpointRegistry.sol": "EndpointRegistry"
+    },
+    "evmVersion": "cancun",
+    "libraries": {},
+    "metadata": {
+      "appendCBOR": false,
+      "bytecodeHash": "none"
+    },
+    "optimizer": {
+      "details": {
+        "constantOptimizer": true,
+        "cse": true,
+        "deduplicate": true,
+        "inliner": true,
+        "jumpdestRemover": true,
+        "orderLiterals": true,
+        "peephole": true,
+        "simpleCounterForLoopUncheckedIncrement": true,
+        "yul": false
+      },
+      "runs": 200
+    },
+    "remappings": []
+  },
+  "sourceSha256": "b87ba72ff2f39f0ea7f64ee66579a7108daa9f218ae59750ac80ba4f8a8631ab",
+  "foundryConfigSha256": "d62047976cca9a0d22e4a75c3cb7689e42c8e93d4517b752f643ca301f4da071",
+  "initcodeBytes": 4239,
+  "initcodeSha256": "bffa7d779dc4b161506e4003864037f34ff1357303c58373b58ea124ea971726",
+  "initcodeKeccak256": "0x6a423afc1357e2b0688675cfcc94d06d02728f57ac6b0d9f3f0623d1a20e67c9",
+  "runtimeBytes": 4172,
+  "runtimeSha256": "ce6f21f57d87051c51ffbfb05330981574d1e516a932aa3b1a95cc6bed13ef45",
+  "runtimeKeccak256": "0xaf2d51783c2f2d144c3913ed45661b328d1ef3661bb4db0668ec8568006d90df",
+  "runtimeHexLineSha256": "ebaf47794b9dd9041d96904ab79daab2ff765aec496df943ec6d482757f9d31f",
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "CHAIN_ID",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_PRICE_ATOMIC",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint96",
+          "internalType": "uint96"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "RESOURCE_ID_DOMAIN",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "acceptOwnership",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "cancelOwnershipTransfer",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "deriveResourceId",
+      "inputs": [
+        {
+          "name": "originalOwner",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "d1ResourceId",
+          "type": "bytes16",
+          "internalType": "bytes16"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "pure"
+    },
+    {
+      "type": "function",
+      "name": "disable",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "getResource",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct EndpointRegistry.Resource",
+          "components": [
+            {
+              "name": "owner",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "version",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "payout",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "priceAtomic",
+              "type": "uint96",
+              "internalType": "uint96"
+            },
+            {
+              "name": "configHash",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "pendingOwner",
+              "type": "address",
+              "internalType": "address"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "register",
+      "inputs": [
+        {
+          "name": "d1ResourceId",
+          "type": "bytes16",
+          "internalType": "bytes16"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "payout",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "priceAtomic",
+          "type": "uint96",
+          "internalType": "uint96"
+        },
+        {
+          "name": "configHash",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "enabled",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "transferOwnership",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "newOwner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "updateConfiguration",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "payout",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "priceAtomic",
+          "type": "uint96",
+          "internalType": "uint96"
+        },
+        {
+          "name": "configHash",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "enabled",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "event",
+      "name": "ConfigurationUpdated",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "payout",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "priceAtomic",
+          "type": "uint96",
+          "indexed": false,
+          "internalType": "uint96"
+        },
+        {
+          "name": "configHash",
+          "type": "bytes32",
+          "indexed": false,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "enabled",
+          "type": "bool",
+          "indexed": false,
+          "internalType": "bool"
+        },
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "OwnershipTransferCancelled",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "pendingOwner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "OwnershipTransferStarted",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "pendingOwner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "OwnershipTransferred",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "previousOwner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "newOwner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResourceDisabled",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResourceRegistered",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "d1ResourceId",
+          "type": "bytes16",
+          "indexed": true,
+          "internalType": "bytes16"
+        },
+        {
+          "name": "payout",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "priceAtomic",
+          "type": "uint96",
+          "indexed": false,
+          "internalType": "uint96"
+        },
+        {
+          "name": "configHash",
+          "type": "bytes32",
+          "indexed": false,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "enabled",
+          "type": "bool",
+          "indexed": false,
+          "internalType": "bool"
+        },
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "error",
+      "name": "AlreadyDisabled",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "AlreadyRegistered",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidConfigHash",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidNewOwner",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidPrice",
+      "inputs": [
+        {
+          "name": "priceAtomic",
+          "type": "uint96",
+          "internalType": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidResourceId",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NoConfigurationChange",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NoPendingTransfer",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ResourceNotFound",
+      "inputs": [
+        {
+          "name": "resourceId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "Unauthorized",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "UnsupportedChain",
+      "inputs": [
+        {
+          "name": "chainId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "VersionMismatch",
+      "inputs": [
+        {
+          "name": "expected",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "actual",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ZeroAddress",
+      "inputs": []
+    }
+  ],
+  "storageLayout": {
+    "storage": [
+      {
+        "astId": 34,
+        "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+        "label": "resources",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_mapping(t_bytes32,t_struct(Resource)29_storage)"
+      }
+    ],
+    "types": {
+      "t_address": {
+        "encoding": "inplace",
+        "label": "address",
+        "numberOfBytes": "20"
+      },
+      "t_bool": {
+        "encoding": "inplace",
+        "label": "bool",
+        "numberOfBytes": "1"
+      },
+      "t_bytes32": {
+        "encoding": "inplace",
+        "label": "bytes32",
+        "numberOfBytes": "32"
+      },
+      "t_mapping(t_bytes32,t_struct(Resource)29_storage)": {
+        "encoding": "mapping",
+        "key": "t_bytes32",
+        "label": "mapping(bytes32 => struct EndpointRegistry.Resource)",
+        "numberOfBytes": "32",
+        "value": "t_struct(Resource)29_storage"
+      },
+      "t_struct(Resource)29_storage": {
+        "encoding": "inplace",
+        "label": "struct EndpointRegistry.Resource",
+        "numberOfBytes": "128",
+        "members": [
+          {
+            "astId": 16,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "owner",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "astId": 18,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "version",
+            "offset": 20,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "astId": 20,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "enabled",
+            "offset": 28,
+            "slot": "0",
+            "type": "t_bool"
+          },
+          {
+            "astId": 22,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "payout",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_address"
+          },
+          {
+            "astId": 24,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "priceAtomic",
+            "offset": 20,
+            "slot": "1",
+            "type": "t_uint96"
+          },
+          {
+            "astId": 26,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "configHash",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_bytes32"
+          },
+          {
+            "astId": 28,
+            "contract": "src/EndpointRegistry.sol:EndpointRegistry",
+            "label": "pendingOwner",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_address"
+          }
+        ]
+      },
+      "t_uint64": {
+        "encoding": "inplace",
+        "label": "uint64",
+        "numberOfBytes": "8"
+      },
+      "t_uint96": {
+        "encoding": "inplace",
+        "label": "uint96",
+        "numberOfBytes": "12"
+      }
+    }
+  }
+}

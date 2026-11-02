@@ -1,13 +1,14 @@
 import { httpsUpstream } from '../../shared/resources'
 import { boundedResponse, deadline, GatewayError } from '../sg05/bounds'
-import { clockTime, type TrustedClock } from '../sg05/clock'
+import { clockTime, monotonicClock, type TrustedClock } from '../sg05/clock'
 import type { RegistryRpc } from './registry'
 /** Server-owned fixed endpoint and transport; never accepts buyer/merchant URL input. No default fetch. */
 export function createReadRpc(
   endpoint: string,
   transport: typeof fetch,
-  clock: TrustedClock,
+  readClock: TrustedClock,
 ): RegistryRpc {
+  const clock = monotonicClock(readClock)
   const url = httpsUpstream(endpoint)
   if (new URL(url).search) throw new GatewayError(503, 'rpc_endpoint_policy')
   let sequence = 0
@@ -18,12 +19,14 @@ export function createReadRpc(
         'eth_getBlockByNumber',
         'eth_getCode',
         'eth_call',
+        'eth_getTransactionReceipt',
+        'eth_getTransactionByHash',
       ].includes(method)
     )
       throw new GatewayError(503, 'rpc_method_forbidden')
-    const started = await clockTime(clock),
-      id = ++sequence
     return deadline(async (signal) => {
+      const started = await clockTime(clock),
+        id = ++sequence
       const combined = AbortSignal.any([signal, outer])
       const response = await transport(url, {
         method: 'POST',
@@ -36,8 +39,8 @@ export function createReadRpc(
         signal: combined,
         body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
       })
-      if (response.status !== 200) {
-        await response.body?.cancel()
+      if (response.status !== 200 || response.redirected) {
+        void response.body?.cancel().catch(() => {})
         throw new GatewayError(503, 'rpc_http_failure')
       }
       const body = (await boundedResponse(
