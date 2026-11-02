@@ -59,6 +59,12 @@ export default function RegistryStatus({
             unverified.
           </p>
           <p>Runtime observation: {String(status.runtimeObservation)}</p>
+          {status.diagnostic && (
+            <p>Observation diagnostic: {String(status.diagnostic)}</p>
+          )}
+          {typeof status.finalizedAgeSeconds === 'number' && (
+            <p>Finalized block age: {status.finalizedAgeSeconds} seconds</p>
+          )}
           {resourceId && (
             <p>
               Resource: {String(status.resourceStatus)}. This does not admit

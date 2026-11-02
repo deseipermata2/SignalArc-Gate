@@ -691,9 +691,26 @@ try {
   )
   assert.equal(browserDisabled.enabled, 0)
   assert.equal(browserDisabled.price_atomic, '1')
+  assert.equal(
+    await page
+      .getByRole('button', {
+        name: 'Read deployed registry status',
+        exact: true,
+      })
+      .count(),
+    1,
+  )
+  assert.equal(
+    await page
+      .getByRole('button', {
+        name: 'Read resource registry status',
+        exact: true,
+      })
+      .count(),
+    await page.getByRole('button', { name: /^Edit / }).count(),
+  )
   await page
     .getByRole('button', { name: 'Read deployed registry status', exact: true })
-    .last()
     .click()
   await page
     .getByText('Server registry RPC is not configured', { exact: true })

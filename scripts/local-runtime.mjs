@@ -175,6 +175,8 @@ export async function onRequest({ request, env }) {
       '--binding',
       'BASE_CHAIN_ID=8453',
       '--binding',
+      'REGISTRY_RPC_URL=',
+      '--binding',
       'APP_ENV=local',
       '--binding',
       `APP_ORIGIN=${origin}`,

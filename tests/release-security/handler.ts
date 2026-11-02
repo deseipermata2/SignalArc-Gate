@@ -144,6 +144,7 @@ export async function onRequest({
       const req = new Request(url.origin + '/api/registry?resourceId=' + rid, {
         headers: { Cookie: 'sg_session=' + 'ab'.repeat(32) },
       })
+      const sampledNow = Math.floor(Date.now() / 1000)
       let reads = 0
       const response = await registryStatus(
         req,
@@ -152,17 +153,69 @@ export async function onRequest({
         async (_input, init) => {
           const request = JSON.parse(String(init?.body))
           reads++
+          if (body.mode === 'timeout') return new Promise<Response>(() => {})
+          if (body.mode === 'slow-body')
+            return new Response(
+              new ReadableStream({
+                start(c) {
+                  c.enqueue(new TextEncoder().encode('{'))
+                },
+              }),
+              { headers: { 'Content-Type': 'application/json' } },
+            )
+          if (body.mode === 'rate-limit')
+            return new Response('LOCAL_PROVIDER_SECRET', { status: 429 })
+          if (body.mode === 'http-error')
+            return new Response('LOCAL_PROVIDER_SECRET', { status: 503 })
+          if (body.mode === 'unsupported' && request.method === 'eth_getCode')
+            return Response.json({
+              jsonrpc: '2.0',
+              id: request.id,
+              error: { code: -32602, message: 'LOCAL_PROVIDER_SECRET' },
+            })
+          if (body.mode === 'rpc-error')
+            return Response.json({
+              jsonrpc: '2.0',
+              id: request.id,
+              error: { code: -32000, message: 'LOCAL_PROVIDER_SECRET' },
+            })
+          if (body.mode === 'malformed')
+            return Response.json({
+              jsonrpc: '2.0',
+              id: request.id + 1,
+              result: '0x2105',
+            })
           let result: unknown
-          if (request.method === 'eth_chainId') result = '0x2105'
+          if (request.method === 'eth_chainId')
+            result = body.mode === 'wrong-chain' ? '0x1' : '0x2105'
           else if (request.method === 'eth_getCode') result = body.runtime
-          else if (request.method === 'eth_getBlockByNumber')
+          else if (request.method === 'eth_getBlockByNumber') {
+            const final =
+              request.params[0] === 'finalized' || request.params[0] === '0x64'
             result = {
-              number: '0x64',
-              hash: blockHash,
+              number: final ? '0x64' : '0x66',
+              hash:
+                body.mode === 'reorg' && request.params[0] === '0x64'
+                  ? finalHash
+                  : final
+                    ? blockHash
+                    : finalHash,
               timestamp:
-                '0x' + BigInt(Math.floor(Date.now() / 1000) - 10).toString(16),
+                '0x' +
+                BigInt(
+                  sampledNow -
+                    (final
+                      ? body.mode === 'normal-lag'
+                        ? 1200
+                        : body.mode === 'stale'
+                          ? 3600
+                          : 10
+                      : body.mode === 'stale-head'
+                        ? 120
+                        : 2),
+                ).toString(16),
             }
-          else if (String(request.params[0].data).length === 10)
+          } else if (String(request.params[0].data).length === 10)
             result = encodeFunctionResult({
               abi: deployedAbi,
               functionName: 'CHAIN_ID',
@@ -202,6 +255,7 @@ export async function onRequest({
             })
           return Response.json({ jsonrpc: '2.0', id: request.id, result })
         },
+        ['timeout', 'slow-body'].includes(body.mode) ? 30 : 5000,
       )
       return Response.json({
         status: await response.json(),
@@ -215,7 +269,7 @@ export async function onRequest({
       })
     }
     if (body.action === 'deployed-registry') {
-      const result = await readDeployment(async (method) => {
+      const result = await readDeployment(async (method, params) => {
         calls++
         if (method === 'eth_chainId')
           return body.mode === 'wrong-chain' ? '0x1' : '0x2105'
@@ -225,9 +279,16 @@ export async function onRequest({
             hash: '0x' + '33'.repeat(32),
             timestamp:
               '0x' +
-              BigInt(now / 1000 - (body.mode === 'stale' ? 1000 : 10)).toString(
-                16,
-              ),
+              BigInt(
+                now / 1000 -
+                  (params[0] === 'latest'
+                    ? 10
+                    : body.mode === 'normal-lag'
+                      ? 1200
+                      : body.mode === 'stale'
+                        ? 3600
+                        : 10),
+              ).toString(16),
           }
         if (method === 'eth_getCode')
           return body.mode === 'bad-code' ? '0x00' : body.runtime

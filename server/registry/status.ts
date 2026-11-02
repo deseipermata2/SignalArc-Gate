@@ -24,11 +24,33 @@ export const abi = parseAbi([
   'function CHAIN_ID() view returns (uint256)',
   'function getResource(bytes32 resourceId) view returns ((address owner,uint64 version,bool enabled,address payout,uint96 priceAtomic,bytes32 configHash,address pendingOwner))',
 ])
-class RpcFailure extends Error {
-  constructor(public data: unknown) {
-    super('RPC failure')
+class ObservationFailure extends Error {
+  constructor(public category: string) {
+    super(category)
   }
 }
+class RpcFailure extends ObservationFailure {
+  constructor(
+    public data: unknown,
+    code: number,
+  ) {
+    super(
+      code === -32601 || code === -32602
+        ? 'canonical_read_unsupported'
+        : 'rpc_error',
+    )
+  }
+}
+export const observationPolicy = Object.freeze({
+  maxFinalizedAgeMs: 30 * 60 * 1000,
+  maxHeadAgeMs: 60 * 1000,
+  maxFutureSkewMs: 1000,
+  timeoutMs: 5000,
+})
+function fail(category: string): never {
+  throw new ObservationFailure(category)
+}
+
 type Rpc = (method: string, params: unknown[]) => Promise<unknown>
 function block(raw: unknown) {
   const b = raw as { hash: string; number: string; timestamp: string }
@@ -36,20 +58,45 @@ function block(raw: unknown) {
     !b ||
     !/^0x[0-9a-fA-F]{64}$/.test(b.hash) ||
     /^0x0{64}$/.test(b.hash) ||
-    !/^0x[0-9a-fA-F]+$/.test(b.number) ||
-    !/^0x[0-9a-fA-F]+$/.test(b.timestamp)
+    !/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,15})$/.test(b.number) ||
+    !/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,15})$/.test(b.timestamp)
   )
-    throw Error('Invalid block')
+    fail('rpc_malformed')
   return b
 }
 /** Provider observation only: no binding confirmation or payment authority. */
-export async function readDeployment(rpc: Rpc, now: number) {
-  if ((await rpc('eth_chainId', [])) !== '0x2105') throw Error('Wrong chain')
+export async function readDeployment(rpc: Rpc, now: number | (() => number)) {
+  const clock = typeof now === 'function' ? now : () => now
+  const time = () => {
+    const value = clock()
+    if (!Number.isSafeInteger(value) || value <= 0) fail('clock_unavailable')
+    return BigInt(value)
+  }
+  if ((await rpc('eth_chainId', [])) !== '0x2105') fail('wrong_chain')
   const finalized = block(
     await rpc('eth_getBlockByNumber', ['finalized', false]),
   )
-  const age = BigInt(now) - BigInt(finalized.timestamp) * 1000n
-  if (age < -1000n || age > 300000n) throw Error('Stale finalized block')
+  const age = time() - BigInt(finalized.timestamp) * 1000n
+  if (
+    age < -BigInt(observationPolicy.maxFutureSkewMs) ||
+    age > BigInt(observationPolicy.maxFinalizedAgeMs)
+  )
+    fail('finality_stale')
+  const head = block(await rpc('eth_getBlockByNumber', ['latest', false]))
+  const headAge = time() - BigInt(head.timestamp) * 1000n
+  if (
+    headAge < -BigInt(observationPolicy.maxFutureSkewMs) ||
+    headAge > BigInt(observationPolicy.maxHeadAgeMs)
+  )
+    fail('head_stale')
+  if (
+    BigInt(head.number) < BigInt(finalized.number) ||
+    BigInt(head.timestamp) < BigInt(finalized.timestamp) ||
+    BigInt(head.timestamp) - BigInt(finalized.timestamp) >
+      BigInt(observationPolicy.maxFinalizedAgeMs / 1000)
+  )
+    fail('consistency_changed')
+
   const at = { blockHash: finalized.hash, requireCanonical: true }
   const code = await rpc('eth_getCode', [deployment.address, at])
   if (
@@ -57,7 +104,7 @@ export async function readDeployment(rpc: Rpc, now: number) {
     !/^0x(?:[0-9a-fA-F]{2}){1,24576}$/.test(code) ||
     keccak256(code as Hex) !== deployment.runtimeCodeHash
   )
-    throw Error('Runtime mismatch')
+    fail('runtime_mismatch')
   const chain = await rpc('eth_call', [
     {
       to: deployment.address,
@@ -73,14 +120,21 @@ export async function readDeployment(rpc: Rpc, now: number) {
       data: chain as Hex,
     }) !== 8453n
   )
-    throw Error('Contract chain mismatch')
-  return { finalized, at }
+    fail('wrong_chain')
+  return {
+    finalized,
+    head,
+    at,
+    finalizedAgeSeconds: Number(age / 1000n),
+    headAgeSeconds: Number(headAge / 1000n),
+  }
 }
 export async function registryStatus(
   request: Request,
   config: ApiConfig,
   env: Record<string, unknown>,
   transport: typeof fetch = fetch,
+  timeoutMs: number = observationPolicy.timeoutMs,
 ) {
   const active = await requireSession(request, config)
   if (request.method !== 'GET') throw new HttpError(405, 'Read only')
@@ -112,214 +166,294 @@ export async function registryStatus(
     productionAdmitted: false,
   }
   if (!env.REGISTRY_RPC_URL)
-    return json({ ...base, reason: 'Server registry RPC is not configured' })
+    return json({
+      ...base,
+      diagnostic: 'rpc_not_configured',
+      reason: 'Server registry RPC is not configured',
+    })
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 5000)
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > observationPolicy.timeoutMs
+  )
+    throw new HttpError(503, 'Invalid observation deadline')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new ObservationFailure('rpc_timeout'))
+    }, timeoutMs)
+  })
   try {
-    const endpoint = httpsUpstream(String(env.REGISTRY_RPC_URL))
-    if (new URL(endpoint).search || new URL(endpoint).hash)
-      throw Error('RPC endpoint policy')
-    let sequence = 0
-    const rpc: Rpc = async (method, params) => {
-      const callId = ++sequence
-      const response = await transport(endpoint, {
-        method: 'POST',
-        redirect: 'manual',
-        cache: 'no-store',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: callId, method, params }),
-      })
-      if (
-        response.status !== 200 ||
-        response.redirected ||
-        !response.body ||
-        response.headers.get('Content-Type')?.split(';')[0].trim() !==
-          'application/json'
-      )
-        throw Error('RPC response')
-      const reader = response.body.getReader()
-      let text = '',
-        bytes = 0
-      const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+    const observe = async () => {
+      let endpoint: string
       try {
-        for (;;) {
-          const part = await reader.read()
-          if (part.done) break
-          bytes += part.value.byteLength
-          if (bytes > 131072) throw Error('RPC limit')
-          text += decoder.decode(part.value, { stream: true })
-        }
-        text += decoder.decode()
-      } finally {
-        void reader.cancel().catch(() => {})
-        reader.releaseLock()
+        if (typeof env.REGISTRY_RPC_URL !== 'string')
+          fail('configuration_invalid')
+        endpoint = httpsUpstream(env.REGISTRY_RPC_URL)
+      } catch {
+        fail('configuration_invalid')
       }
-      const value = JSON.parse(text)
-      if (value.error) throw new RpcFailure(value.error.data)
-      if (
-        value.jsonrpc !== '2.0' ||
-        value.id !== callId ||
-        value.error ||
-        !Object.hasOwn(value, 'result')
-      )
-        throw Error('RPC envelope')
-      return value.result
-    }
-    const { finalized, at } = await readDeployment(rpc, Date.now())
-    let resourceStatus = id ? 'not_bound' : 'not_requested'
-    if (row?.onchain_resource_id) {
-      resourceStatus = 'unconfirmed'
-      if (
-        row.registry_address &&
-        String(row.registry_address).toLowerCase() ===
-          deployment.address.toLowerCase() &&
-        !row.conflicted &&
-        row.review_conflicted !== 1
-      ) {
-        const derived = keccak256(
-          encodeAbiParameters(
-            [
-              { type: 'bytes32' },
-              { type: 'uint256' },
-              { type: 'address' },
-              { type: 'bytes16' },
-            ],
-            [
-              keccak256(toHex('SignalArcGate.Resource.v1')),
-              8453n,
-              String(row.original_owner) as Hex,
-              `0x${id!.replaceAll('-', '')}` as Hex,
-            ],
-          ),
-        )
-        const configHash = keccak256(
-          encodeAbiParameters(
-            [
-              { type: 'bytes32' },
-              { type: 'bytes32' },
-              { type: 'bytes32' },
-              { type: 'uint8' },
-              { type: 'uint32' },
-              { type: 'uint8' },
-              { type: 'bytes32' },
-            ],
-            [
-              keccak256(toHex('SignalArcGate.EndpointConfig.v1')),
-              derived,
-              keccak256(toHex(String(row.upstream_url))),
-              1,
-              JSON.parse(String(row.response_config)).maxBytes,
-              0,
-              String(row.config_salt) as Hex,
-            ],
-          ),
-        )
-        if (
-          derived !== row.onchain_resource_id ||
-          configHash !== row.config_hash
-        )
-          throw Error('Binding mismatch')
-        const data = encodeFunctionData({
-          abi,
-          functionName: 'getResource',
-          args: [String(row.onchain_resource_id) as Hex],
+      if (new URL(endpoint).search || new URL(endpoint).hash)
+        fail('configuration_invalid')
+      let sequence = 0
+      const rpc: Rpc = async (method, params) => {
+        if (controller.signal.aborted) fail('rpc_timeout')
+        const callId = ++sequence
+        const response = await transport(endpoint, {
+          method: 'POST',
+          redirect: 'manual',
+          cache: 'no-store',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: callId, method, params }),
         })
-        let raw: unknown
-        try {
-          raw = await rpc('eth_call', [{ to: deployment.address, data }, at])
-        } catch (error) {
-          const notFound =
-            keccak256(toHex('ResourceNotFound(bytes32)')).slice(0, 10) +
-            String(row.onchain_resource_id).slice(2)
-          if (!(error instanceof RpcFailure) || error.data !== notFound)
-            throw error
-          raw = null
+        if (
+          response.status !== 200 ||
+          response.redirected ||
+          !response.body ||
+          response.headers
+            .get('Content-Type')
+            ?.split(';')[0]
+            .trim()
+            .toLowerCase() !== 'application/json'
+        ) {
+          void response.body?.cancel().catch(() => {})
+          fail(response.status === 429 ? 'rpc_rate_limited' : 'rpc_http_error')
         }
-        if (raw === null) resourceStatus = 'not_registered'
-        else {
-          const state = decodeFunctionResult({
-            abi,
-            functionName: 'getResource',
-            data: raw as Hex,
-          })
-          const head = block(
-            await rpc('eth_getBlockByNumber', ['latest', false]),
+        const reader = response.body.getReader()
+        const cancel = () => {
+          void reader.cancel().catch(() => {})
+        }
+        controller.signal.addEventListener('abort', cancel, { once: true })
+        if (controller.signal.aborted) {
+          cancel()
+          fail('rpc_timeout')
+        }
+        let text = '',
+          bytes = 0
+        const decoder = new TextDecoder('utf-8', {
+          fatal: true,
+          ignoreBOM: true,
+        })
+        try {
+          for (;;) {
+            const part = await reader.read()
+            if (part.done) break
+            bytes += part.value.byteLength
+            if (bytes > 131072) fail('rpc_response_limit')
+            text += decoder.decode(part.value, { stream: true })
+          }
+          text += decoder.decode()
+        } finally {
+          void reader.cancel().catch(() => {})
+          controller.signal.removeEventListener('abort', cancel)
+          reader.releaseLock()
+        }
+        if (controller.signal.aborted) fail('rpc_timeout')
+        let value
+        try {
+          value = JSON.parse(text)
+        } catch {
+          fail('rpc_malformed')
+        }
+        if (!value) fail('rpc_malformed')
+        if (
+          value.jsonrpc !== '2.0' ||
+          value.id !== callId ||
+          typeof value !== 'object' ||
+          Array.isArray(value) ||
+          Object.hasOwn(value, 'error') === Object.hasOwn(value, 'result')
+        )
+          fail('rpc_malformed')
+        if (Object.hasOwn(value, 'error')) {
+          if (!value.error || !Number.isInteger(value.error.code))
+            fail('rpc_malformed')
+          throw new RpcFailure(value.error.data, value.error.code)
+        }
+        return value.result
+      }
+      const { finalized, head, at, finalizedAgeSeconds, headAgeSeconds } =
+        await readDeployment(rpc, Date.now)
+      let resourceStatus = id ? 'not_bound' : 'not_requested'
+      if (row?.onchain_resource_id) {
+        resourceStatus = 'unconfirmed'
+        if (
+          row.registry_address &&
+          String(row.registry_address).toLowerCase() ===
+            deployment.address.toLowerCase() &&
+          !row.conflicted &&
+          row.review_conflicted !== 1
+        ) {
+          const derived = keccak256(
+            encodeAbiParameters(
+              [
+                { type: 'bytes32' },
+                { type: 'uint256' },
+                { type: 'address' },
+                { type: 'bytes16' },
+              ],
+              [
+                keccak256(toHex('SignalArcGate.Resource.v1')),
+                8453n,
+                String(row.original_owner) as Hex,
+                `0x${id!.replaceAll('-', '')}` as Hex,
+              ],
+            ),
           )
-          const headRaw = await rpc('eth_call', [
-            { to: deployment.address, data },
-            { blockHash: head.hash, requireCanonical: true },
-          ])
-          const headCheck = block(
-            await rpc('eth_getBlockByNumber', [head.number, false]),
+          const configHash = keccak256(
+            encodeAbiParameters(
+              [
+                { type: 'bytes32' },
+                { type: 'bytes32' },
+                { type: 'bytes32' },
+                { type: 'uint8' },
+                { type: 'uint32' },
+                { type: 'uint8' },
+                { type: 'bytes32' },
+              ],
+              [
+                keccak256(toHex('SignalArcGate.EndpointConfig.v1')),
+                derived,
+                keccak256(toHex(String(row.upstream_url))),
+                1,
+                JSON.parse(String(row.response_config)).maxBytes,
+                0,
+                String(row.config_salt) as Hex,
+              ],
+            ),
           )
           if (
-            headCheck.number !== head.number ||
-            headCheck.hash !== head.hash ||
-            headCheck.timestamp !== head.timestamp ||
-            BigInt(head.number) < BigInt(finalized.number) ||
-            BigInt(head.timestamp) < BigInt(finalized.timestamp) ||
-            BigInt(head.timestamp) * 1000n > BigInt(Date.now() + 1000)
+            derived !== row.onchain_resource_id ||
+            configHash !== row.config_hash
           )
-            throw Error('Head inconsistent')
-          if (raw !== headRaw) resourceStatus = 'mismatch'
-          else if (state.owner === '0x0000000000000000000000000000000000000000')
-            resourceStatus = 'not_registered'
-          else if (
-            raw === headRaw &&
-            state.owner.toLowerCase() ===
-              String(row.wallet_address).toLowerCase() &&
-            state.payout.toLowerCase() ===
-              String(row.payout_address).toLowerCase() &&
-            state.priceAtomic.toString() === row.price_atomic &&
-            state.configHash.toLowerCase() ===
-              String(row.config_hash).toLowerCase() &&
-            state.version.toString() === row.registry_version &&
-            state.pendingOwner ===
-              '0x0000000000000000000000000000000000000000' &&
-            state.enabled &&
-            row.enabled === 1
-          )
-            resourceStatus = 'matching_observation_only'
-          else resourceStatus = 'mismatch'
+            fail('binding_mismatch')
+          const data = encodeFunctionData({
+            abi,
+            functionName: 'getResource',
+            args: [String(row.onchain_resource_id) as Hex],
+          })
+          let raw: unknown
+          try {
+            raw = await rpc('eth_call', [{ to: deployment.address, data }, at])
+          } catch (error) {
+            const notFound =
+              keccak256(toHex('ResourceNotFound(bytes32)')).slice(0, 10) +
+              String(row.onchain_resource_id).slice(2)
+            if (!(error instanceof RpcFailure) || error.data !== notFound)
+              throw error
+            raw = null
+          }
+          if (raw === null) resourceStatus = 'not_registered'
+          else {
+            const state = decodeFunctionResult({
+              abi,
+              functionName: 'getResource',
+              data: raw as Hex,
+            })
+            const headRaw = await rpc('eth_call', [
+              { to: deployment.address, data },
+              { blockHash: head.hash, requireCanonical: true },
+            ])
+            const headCheck = block(
+              await rpc('eth_getBlockByNumber', [head.number, false]),
+            )
+            if (
+              headCheck.number !== head.number ||
+              headCheck.hash !== head.hash ||
+              headCheck.timestamp !== head.timestamp ||
+              BigInt(head.number) < BigInt(finalized.number) ||
+              BigInt(head.timestamp) < BigInt(finalized.timestamp) ||
+              BigInt(head.timestamp) * 1000n > BigInt(Date.now() + 1000)
+            )
+              fail('consistency_changed')
+            if (raw !== headRaw) resourceStatus = 'mismatch'
+            else if (
+              state.owner === '0x0000000000000000000000000000000000000000'
+            )
+              resourceStatus = 'not_registered'
+            else if (
+              raw === headRaw &&
+              state.owner.toLowerCase() ===
+                String(row.wallet_address).toLowerCase() &&
+              state.payout.toLowerCase() ===
+                String(row.payout_address).toLowerCase() &&
+              state.priceAtomic.toString() === row.price_atomic &&
+              state.configHash.toLowerCase() ===
+                String(row.config_hash).toLowerCase() &&
+              state.version.toString() === row.registry_version &&
+              state.pendingOwner ===
+                '0x0000000000000000000000000000000000000000' &&
+              state.enabled &&
+              row.enabled === 1
+            )
+              resourceStatus = 'matching_observation_only'
+            else resourceStatus = 'mismatch'
+          }
         }
       }
-    }
-    const canonical = block(
-      await rpc('eth_getBlockByNumber', [finalized.number, false]),
-    )
-    if (
-      canonical.number !== finalized.number ||
-      canonical.hash !== finalized.hash ||
-      canonical.timestamp !== finalized.timestamp
-    )
-      throw Error('Reorg')
-    if (id) {
-      const current = await config.db
-        .prepare(
-          'SELECT r.payment_revision,b.generation FROM api_resources r LEFT JOIN resource_registry_bindings b ON b.resource_id=r.id WHERE r.id=? AND r.merchant_id=?',
-        )
-        .bind(id, active.merchant_id)
-        .first<{ payment_revision: number; generation: unknown }>()
-      if (
-        !current ||
-        current.payment_revision !== row?.payment_revision ||
-        current.generation !== row?.generation
+      const canonical = block(
+        await rpc('eth_getBlockByNumber', [finalized.number, false]),
       )
-        throw Error('Resource changed')
+      if (
+        canonical.number !== finalized.number ||
+        canonical.hash !== finalized.hash ||
+        canonical.timestamp !== finalized.timestamp
+      )
+        fail('consistency_changed')
+      const canonicalHead = block(
+        await rpc('eth_getBlockByNumber', [head.number, false]),
+      )
+      if (
+        canonicalHead.hash !== head.hash ||
+        canonicalHead.number !== head.number ||
+        canonicalHead.timestamp !== head.timestamp
+      )
+        fail('consistency_changed')
+      if (
+        Date.now() - Number(BigInt(finalized.timestamp) * 1000n) >
+          observationPolicy.maxFinalizedAgeMs ||
+        Date.now() - Number(BigInt(head.timestamp) * 1000n) >
+          observationPolicy.maxHeadAgeMs
+      )
+        fail('finality_stale')
+      if (id) {
+        const current = await config.db
+          .prepare(
+            'SELECT r.payment_revision,b.generation FROM api_resources r LEFT JOIN resource_registry_bindings b ON b.resource_id=r.id WHERE r.id=? AND r.merchant_id=?',
+          )
+          .bind(id, active.merchant_id)
+          .first<{ payment_revision: number; generation: unknown }>()
+        if (
+          !current ||
+          current.payment_revision !== row?.payment_revision ||
+          current.generation !== row?.generation
+        )
+          fail('consistency_changed')
+      }
+      return json({
+        ...base,
+        runtimeObservation: 'matching_finalized_rpc_observation',
+        resourceStatus,
+        blockNumber: BigInt(finalized.number).toString(),
+        finalizedAgeSeconds,
+        headAgeSeconds,
+        diagnostic: 'ok',
+      })
     }
+    return await Promise.race([observe(), timeout])
+  } catch (error) {
     return json({
       ...base,
-      runtimeObservation: 'matching_finalized_rpc_observation',
-      resourceStatus,
-      blockNumber: BigInt(finalized.number).toString(),
-    })
-  } catch {
-    return json({
-      ...base,
+      diagnostic: controller.signal.aborted
+        ? 'rpc_timeout'
+        : error instanceof ObservationFailure
+          ? error.category
+          : 'observation_unavailable',
       reason: 'Registry observation unavailable or inconsistent',
     })
   } finally {

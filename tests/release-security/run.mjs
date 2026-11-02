@@ -150,6 +150,57 @@ try {
   pass(
     'authenticated D1 resource observations distinguish matching, unregistered and mismatched state without confirming bindings',
   )
+
+  const normalLag = await invoke('deployed-resource', 'normal-lag', {
+    runtime: artifact.deployedBytecode.object,
+  })
+  assert.equal(
+    normalLag.body.status.runtimeObservation,
+    'matching_finalized_rpc_observation',
+    JSON.stringify(normalLag.body),
+  )
+  assert.equal(normalLag.body.status.finalizedAgeSeconds >= 1200, true)
+  pass(
+    'normal twenty-minute Base finalized lag remains hash-pinned with fresh head and no admission',
+  )
+  for (const [mode, category] of [
+    ['stale', 'finality_stale'],
+    ['stale-head', 'head_stale'],
+    ['wrong-chain', 'wrong_chain'],
+    ['unsupported', 'canonical_read_unsupported'],
+    ['rpc-error', 'rpc_error'],
+    ['rate-limit', 'rpc_rate_limited'],
+    ['http-error', 'rpc_http_error'],
+    ['malformed', 'rpc_malformed'],
+    ['timeout', 'rpc_timeout'],
+    ['slow-body', 'rpc_timeout'],
+    ['reorg', 'consistency_changed'],
+  ]) {
+    const result = await invoke('deployed-resource', mode, {
+      runtime: artifact.deployedBytecode.object,
+    })
+    assert.equal(
+      result.body.status.runtimeObservation,
+      'unavailable',
+      JSON.stringify(result.body),
+    )
+    assert.equal(
+      result.body.status.diagnostic,
+      category,
+      JSON.stringify(result.body),
+    )
+    assert.equal(result.body.status.productionAdmitted, false)
+    if (['timeout', 'slow-body', 'rpc-error', 'wrong-chain'].includes(mode))
+      assert.equal(result.body.reads, 1)
+    if (mode === 'unsupported') assert.equal(result.body.reads, 4)
+    assert.equal(result.body.source.source, 'unconfirmed')
+    assert.equal(
+      JSON.stringify(result.body).includes('LOCAL_PROVIDER_SECRET'),
+      false,
+    )
+    assert.equal(JSON.stringify(result.body).includes('rpc.example.com'), false)
+    pass('registry fails closed with sanitized diagnostic for ' + mode)
+  }
   const review = await invoke('settlement-review', 'ok')
   assert.equal(review.status, 200, JSON.stringify(review.body))
   assert.equal(review.body.review.outcome, 'rpc_observation_only')

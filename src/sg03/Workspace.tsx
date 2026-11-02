@@ -501,7 +501,7 @@ function Manager() {
             </div>
           </section>
         )}
-        {merchant && <RegistryStatus key={merchant.id} />}
+        {merchant && <RegistryStatus key={`registry:${merchant.id}`} />}
         {merchant && (
           <Activity
             key={merchant.id}
