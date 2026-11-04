@@ -1,3 +1,4 @@
+import { handlePaymentRoute } from '../payments/route'
 import { currentSession, logout, nonce, verify } from './auth'
 import { apiConfig, apiError, HttpError, requireCsrf } from './http'
 import { resources } from './resources'
@@ -21,6 +22,8 @@ export async function handleApi(
     if (Number(request.headers.get('Content-Length') ?? '0') > 16384)
       throw new HttpError(413, 'Request body exceeds 16 KiB')
     const path = new URL(request.url).pathname
+    if (/^\/api\/pay\/[a-f0-9-]{36}$/.test(path))
+      return await handlePaymentRoute(request, env)
     const known =
       [
         '/api/auth/nonce',

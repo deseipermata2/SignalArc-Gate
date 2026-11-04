@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from './payment-bundle-policy.mjs'
 import { build } from 'vite'
 import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -25,9 +26,9 @@ execFileSync(
 )
 const inputs = Object.keys(JSON.parse(await readFile(meta, 'utf8')).inputs)
 assert.deepEqual(
-  inputs.filter((p) => forbidden.test(p)),
+  unsafePaymentInputs(inputs),
   [],
-  'Payment/test/dependency boundary reached public Functions',
+  'Unsafe payment/test/dependency capability reached public Functions',
 )
 let browser = [],
   chunks = []
@@ -59,5 +60,5 @@ await writeFile(
   ) + '\n',
 )
 console.log(
-  `Public Functions: ${inputs.length} inputs; browser: ${browser.length} inputs, ${chunks.length} chunks; no payment/test SDK, Zod or minimatch code in either input graph. This does not remediate installed advisories.`,
+  `Public Functions: ${inputs.length} inputs; browser: ${browser.length} inputs, ${chunks.length} chunks; only vetted production payment leaves, CDP auth and patched Foundation parser in Functions; no payment SDK in browser. This does not remediate installed advisories.`,
 )

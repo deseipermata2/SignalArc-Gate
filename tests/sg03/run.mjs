@@ -99,6 +99,7 @@ try {
       '0006_sg07_api_budget.sql',
       '0007_sg07_settlement_observations.sql',
       '0008_sg07_settlement_journal_integrity.sql',
+      '0009_sg07_payment_activation.sql',
     ],
     localOnly: true,
   })

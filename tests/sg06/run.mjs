@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from '../../scripts/payment-bundle-policy.mjs'
 import assert from 'node:assert/strict'
 import { resolve, join } from 'node:path'
 import { readFile, mkdir } from 'node:fs/promises'
@@ -130,6 +131,7 @@ try {
     '0006_sg07_api_budget.sql',
     '0007_sg07_settlement_observations.sql',
     '0008_sg07_settlement_journal_integrity.sql',
+    '0009_sg07_payment_activation.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   for (const [name, digest] of historical)
@@ -646,18 +648,9 @@ try {
     },
   )
   const inputs = Object.keys(JSON.parse(await readFile(meta, 'utf8')).inputs)
-  assert.equal(
-    inputs.some(
-      (p) =>
-        p.includes('tests/') ||
-        p.includes('server/sg05/') ||
-        p.includes('@x402') ||
-        p.includes('@coinbase'),
-    ),
-    false,
-  )
+  assert.deepEqual(unsafePaymentInputs(inputs), [])
   pass(
-    'production Functions includes authenticated reporting but excludes local fixtures, SG05 gateway/payment SDKs and all public paid fulfillment',
+    'production Functions includes authenticated reporting but excludes local fixtures and SG05 mock gateway; production payments remain default disabled',
   )
   console.log(
     `${passed} SG-06 checks passed in native Pages/workerd + real local D1 and Chromium. Payment records are labeled local test fixtures, never real Mainnet activity.`,

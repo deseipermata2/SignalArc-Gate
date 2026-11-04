@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.functions.json",
+  "include": ["handler.ts", "../../server/payments"]
+}

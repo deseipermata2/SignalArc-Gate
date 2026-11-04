@@ -9,7 +9,7 @@ import { requireSession } from '../sg03/auth'
 import { hash, HttpError, json, type ApiConfig } from '../sg03/http'
 const asset = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
 const attemptProvenance = `CASE WHEN a.evidence_kind = 'local_simulation' AND a.network = 'eip155:8453' AND lower(a.asset) = '${asset}' THEN 'local_simulation' ELSE 'unverified' END`
-// A provenance flag alone is never sufficient for a Mainnet claim. Production admission is not implemented.
+// A provenance flag alone is never sufficient for a Mainnet metric; reporting remains conservative.
 const receiptProvenance = `CASE WHEN p.evidence_kind = 'local_simulation' AND a.evidence_kind = 'local_simulation'
  AND p.network = 'eip155:8453' AND a.network = p.network AND lower(a.asset) = '${asset}'
  AND p.amount_atomic = a.amount_atomic AND lower(p.payout_address) = lower(a.recipient)
@@ -192,7 +192,7 @@ export async function reporting(
           settlements: null,
           amountAtomic: null,
           reason:
-            'Public payments are disabled. No approved production confirmation reader exists; provenance labels alone are not Mainnet proof.',
+            'Public payments remain default disabled. Reporting does not promote stored provenance labels to verified Mainnet metrics; canonical re-observation is required.',
         },
         attempts: { total: 0, localSimulation: 0, unverified: 0, byPhase: {} },
         receipts: {

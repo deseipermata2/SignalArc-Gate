@@ -14,7 +14,7 @@
     "test:foundation": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs",
     "test:d1": "tsc -p tsconfig.functions.json && node tests/foundation/run.mjs --d1-only",
     "test:ui": "node tests/foundation/run.mjs --ui-only",
-    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03 && npm run test:sg05 && npm run test:sg06 && npm run test:sg07 && npm run test:registry-admission && npm run test:upstream-security && npm run test:release-security && npm run test:builder-code",
+    "test": "npm run test:foundation && npm run test:compatibility && npm run test:sg03 && npm run test:sg05 && npm run test:sg06 && npm run test:sg07 && npm run test:registry-admission && npm run test:upstream-security && npm run test:release-security && npm run test:builder-code && npm run test:activation",
     "test:settlement-reliability": "npm run test:sg05 && npm run test:sg07",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -31,7 +31,8 @@
     "test:internal-json": "tsc -p tests/sg05/tsconfig.json && node tests/sg05/run.mjs --internal-json-only",
     "check:cdp-auth-boundary": "node scripts/cdp-auth-boundary.mjs",
     "test:settlement-admission": "tsc -p tests/sg05/tsconfig.json && node tests/sg05/run.mjs --internal-json-only --admission-only",
-    "test:builder-code": "tsc -p tests/builder-code/tsconfig.json && node tests/builder-code/run.mjs"
+    "test:builder-code": "tsc -p tests/builder-code/tsconfig.json && node tests/builder-code/run.mjs",
+    "test:activation": "tsc -p tests/activation/tsconfig.json && node tests/activation/run.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "1.60.0",

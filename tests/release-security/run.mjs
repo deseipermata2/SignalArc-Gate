@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from '../../scripts/payment-bundle-policy.mjs'
 import assert from 'node:assert/strict'
 import { resolve, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
@@ -96,7 +97,7 @@ async function invoke(action, mode, extra = {}) {
 try {
   assert.equal(
     (await runtime.control('migrate')).applied.at(-1),
-    '0008_sg07_settlement_journal_integrity.sql',
+    '0009_sg07_payment_activation.sql',
   )
   assert.equal((await runtime.control('migrate')).applied.length, 0)
   pass(
@@ -454,12 +455,7 @@ try {
   )
   const inputs = Object.keys(JSON.parse(await readFile(meta, 'utf8')).inputs)
   assert.ok(inputs.some((p) => p.includes('server/sg03/budget')))
-  assert.equal(
-    inputs.some((p) =>
-      /server\/sg0[57]|tests\/|@coinbase|@x402|\/zod\//.test(p),
-    ),
-    false,
-  )
+  assert.deepEqual(unsafePaymentInputs(inputs), [])
   for (const path of [
     '/api/pay/x',
     '/api/gateway',
@@ -482,7 +478,7 @@ try {
   }
   assert.equal((await fetch(runtime.origin + '/api/health')).status, 200)
   pass(
-    'actual production Functions include the budget but exclude fixtures, observer, mock gateway and payment SDKs; forged flags cannot publish payments',
+    'actual production Functions include budget and vetted payment evidence reader, exclude fixtures/mock gateway; forged flags cannot publish payments',
   )
   console.log(
     `${count} release-security checks passed in native local workerd and D1. LOCAL SIMULATION ONLY; no live chain, facilitator or upstream egress.`,

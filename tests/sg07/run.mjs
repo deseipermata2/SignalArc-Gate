@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from '../../scripts/payment-bundle-policy.mjs'
 import assert from 'node:assert/strict'
 import { resolve, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
@@ -319,12 +320,7 @@ try {
     },
   )
   const inputs = Object.keys(JSON.parse(await readFile(meta, 'utf8')).inputs)
-  assert.equal(
-    inputs.some((x) =>
-      /tests\/|server\/sg05\/|server\/sg07\/|@x402|@coinbase|zod/.test(x),
-    ),
-    false,
-  )
+  assert.deepEqual(unsafePaymentInputs(inputs), [])
   for (const path of [
     '/api/pay/x',
     '/api/sg07/registry',
@@ -340,7 +336,7 @@ try {
     await r.arrayBuffer()
   }
   pass(
-    'production Functions exclude readiness adapters, fixtures and payment SDK/Zod parsing; forged local flags cannot activate paid routes',
+    'production Functions include only reviewed payment capabilities; no mocks or vulnerable parsers; forged local flags cannot activate paid routes',
   )
   console.log(
     `${count} SG-07 checks passed in local Pages/workerd, D1 and compiler ABI inspection; no live RPC/CDP calls.`,

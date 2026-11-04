@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from '../../scripts/payment-bundle-policy.mjs'
 import { parseBuilderCodeSuffixFromCalldata } from '@x402/extensions/builder-code'
 import { chainFixture, alterChainFixture } from './chain-fixture.mjs'
 import assert from 'node:assert/strict'
@@ -607,6 +608,7 @@ try {
     '0006_sg07_api_budget.sql',
     '0007_sg07_settlement_observations.sql',
     '0008_sg07_settlement_journal_integrity.sql',
+    '0009_sg07_payment_activation.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   assert.equal(
@@ -2511,17 +2513,7 @@ try {
     },
   )
   const inputs = Object.keys(JSON.parse(await readFile(meta, 'utf8')).inputs)
-  assert.equal(
-    inputs.some(
-      (p) =>
-        p.includes('server/sg05') ||
-        p.includes('server/sg07/internal-json') ||
-        p.includes('tests/') ||
-        p.includes('@x402') ||
-        p.includes('@coinbase'),
-    ),
-    false,
-  )
+  assert.deepEqual(unsafePaymentInputs(inputs), [])
   assert.equal(duplicatedSettles, 0)
   const db = await inspect()
   assert.equal(

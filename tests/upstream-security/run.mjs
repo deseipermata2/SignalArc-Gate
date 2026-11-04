@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from '../../scripts/payment-bundle-policy.mjs'
 import assert from 'node:assert/strict'
 import { join, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
@@ -192,12 +193,7 @@ try {
     },
   )
   const inputs = Object.keys(JSON.parse(await readFile(meta, 'utf8')).inputs)
-  assert.equal(
-    inputs.some((x) =>
-      /tests\/|server\/sg05\/|server\/sg07\/|@x402|@coinbase/.test(x),
-    ),
-    false,
-  )
+  assert.deepEqual(unsafePaymentInputs(inputs), [])
   for (const p of ['/api/upstream', '/api/upstream-security', '/api/pay/x']) {
     const r = await fetch(runtime.origin + p, {
       method: 'POST',

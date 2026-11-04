@@ -1,3 +1,4 @@
+import { unsafePaymentInputs } from '../../scripts/payment-bundle-policy.mjs'
 import assert from 'node:assert/strict'
 import { resolve, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -87,6 +88,7 @@ try {
     '0006_sg07_api_budget.sql',
     '0007_sg07_settlement_observations.sql',
     '0008_sg07_settlement_journal_integrity.sql',
+    '0009_sg07_payment_activation.sql',
   ])
   assert.equal((await runtime.control('migrate')).applied.length, 0)
   const repaired = await inspect(legacyId)
@@ -467,12 +469,7 @@ try {
   const inputs = Object.keys(
     JSON.parse(await readFile(metadata, 'utf8')).inputs,
   )
-  assert.equal(
-    inputs.some((x) =>
-      /tests\/|server\/sg05\/|server\/sg07\/|@x402|@coinbase/.test(x),
-    ),
-    false,
-  )
+  assert.deepEqual(unsafePaymentInputs(inputs), [])
   for (const path of [
     '/api/registry/confirm',
     '/api/registry-review',

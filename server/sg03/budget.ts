@@ -1,7 +1,7 @@
 import { HttpError } from './http'
 /** Global application budget, not an edge limiter or a fairness guarantee. No client-selected keys. */
 export async function takeApiBudget(
-  db: D1Database,
+  db: Pick<D1Database, 'prepare'>,
   now: number,
   limits = { minute: 600, day: 20000 },
 ) {

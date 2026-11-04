@@ -1,3 +1,4 @@
+import { internalDocument } from '../payments/document'
 import { resourceInput } from '../../shared/resources'
 import { hash } from '../sg03/http'
 import { boundedJson, canonical, GatewayError } from '../sg05/bounds'
@@ -181,14 +182,13 @@ export async function createLocalInternalJsonPilot(
       return Response.json(
         {
           localSimulationOnly: true,
-          document: 'SignalArc Gate resource payment configuration',
-          resourceId: entry.id,
-          network: NETWORK,
-          asset: USDC,
-          amountAtomic: entry.resource.priceAtomic,
-          payTo: entry.resource.payoutAddress,
-          registryVersion: entry.binding.registry_version,
-          configurationCommitment: entry.binding.config_hash,
+          ...internalDocument({
+            resourceId: entry.id,
+            amountAtomic: entry.resource.priceAtomic,
+            payTo: entry.resource.payoutAddress,
+            registryVersion: entry.binding.registry_version,
+            configurationCommitment: entry.binding.config_hash,
+          }),
         },
         {
           headers: {
