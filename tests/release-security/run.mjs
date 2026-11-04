@@ -96,11 +96,11 @@ async function invoke(action, mode, extra = {}) {
 try {
   assert.equal(
     (await runtime.control('migrate')).applied.at(-1),
-    '0007_sg07_settlement_observations.sql',
+    '0008_sg07_settlement_journal_integrity.sql',
   )
   assert.equal((await runtime.control('migrate')).applied.length, 0)
   pass(
-    'seven forward migrations apply in real local D1 and repeat with matching historical digests',
+    'eight forward migrations apply in real local D1 and repeat with matching historical digests',
   )
   const artifact = JSON.parse(
     await readFile(

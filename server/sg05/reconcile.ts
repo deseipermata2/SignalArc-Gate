@@ -1,11 +1,12 @@
 import type { SettleResponse } from '@x402/core/types'
-import { boundedJson, GatewayError } from './bounds'
+import { boundedJson, deadline, GatewayError } from './bounds'
 import { NETWORK, USDC } from './registry'
 import { validSettlement } from './protocol'
-import { PaymentStore } from './store'
+import { PaymentStore, type Attempt } from './store'
 export interface LocalEvidence {
   localSimulationOnly: true
   identity: string
+  fingerprint: string
   network: string
   asset: string
   recipient: string
@@ -19,6 +20,10 @@ export async function reconcileUnknown(
   store: PaymentStore,
   id: string,
   lookup: (identity: string) => Promise<LocalEvidence>,
+  validateLocalSettlement?: (
+    attempt: Attempt,
+    result: SettleResponse,
+  ) => Promise<void>,
 ) {
   const attempt = await store.get(id)
   if (
@@ -26,10 +31,11 @@ export async function reconcileUnknown(
     attempt.phase !== 'settlement_unknown' ||
     attempt.evidence_kind !== 'local_simulation' ||
     !attempt.authorization_key ||
+    !attempt.authorization_fingerprint ||
     !attempt.buyer_address
   )
     throw new GatewayError(409, 'attempt_not_reconcilable')
-  const evidence = await lookup(attempt.authorization_key)
+  const evidence = await deadline(() => lookup(attempt.authorization_key!))
   // Returned objects are untrusted runtime values even when a local capability is typed.
   boundedJson(JSON.stringify(evidence))
   if (
@@ -41,6 +47,7 @@ export async function reconcileUnknown(
     !['settled', 'not_submitted', 'unknown'].includes(evidence.disposition) ||
     evidence.localSimulationOnly !== true ||
     evidence.identity !== attempt.authorization_key ||
+    evidence.fingerprint !== attempt.authorization_fingerprint ||
     evidence.network !== NETWORK ||
     evidence.asset.toLowerCase() !== USDC.toLowerCase() ||
     evidence.recipient.toLowerCase() !== attempt.recipient.toLowerCase() ||
@@ -58,6 +65,11 @@ export async function reconcileUnknown(
       attempt.recipient,
     )
   ) {
+    // The pilot must not bypass its stronger evidence gate via recovery.
+    if (validateLocalSettlement)
+      await deadline(() =>
+        validateLocalSettlement(attempt, evidence.settlement!),
+      )
     if (
       !(await store.settle(attempt, evidence.settlement, 'settlement_unknown'))
     )

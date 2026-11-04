@@ -1,3 +1,5 @@
+import { parseBuilderCodeSuffixFromCalldata } from '@x402/extensions/builder-code'
+import { chainFixture, alterChainFixture } from './chain-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
@@ -34,6 +36,30 @@ const domain = {
 }
 const digest = (v) =>
   createHash('sha256').update(JSON.stringify(v)).digest('hex')
+const ordered = (v) =>
+  v && typeof v === 'object'
+    ? Object.fromEntries(
+        Object.keys(v)
+          .sort()
+          .map((k) => [k, ordered(v[k])]),
+      )
+    : v
+const fingerprint = (p) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify(
+        ordered({
+          authorization: {
+            ...p.payload.authorization,
+            from: p.payload.authorization.from.toLowerCase(),
+            to: p.payload.authorization.to.toLowerCase(),
+            nonce: p.payload.authorization.nonce.toLowerCase(),
+          },
+          signature: p.payload.signature.toLowerCase(),
+        }),
+      ),
+    )
+    .digest('hex')
 const identity = (a) =>
   digest([
     network,
@@ -64,6 +90,7 @@ function send(res, value, status = 200) {
     res.end(JSON.stringify(value))
   }
 }
+const chainFixtures = new Map()
 const mock = createServer(async (req, res) => {
   try {
     let raw = ''
@@ -81,6 +108,15 @@ const mock = createServer(async (req, res) => {
         ? identity(body.paymentPayload.payload.authorization)
         : undefined,
     })
+    if (path === '/chain')
+      return send(
+        res,
+        alterChainFixture(
+          chainFixtures.get(body.identity),
+          scenario.chainEvidence,
+          other.address,
+        ),
+      )
     if (path === '/clock')
       return send(
         res,
@@ -99,7 +135,7 @@ const mock = createServer(async (req, res) => {
           scenario.supported === 'wrong'
             ? []
             : [{ x402Version: 2, scheme: 'exact', network }],
-        extensions: [],
+        extensions: ['builder-code'],
         signers: {},
       })
     if (path === '/reconcile') {
@@ -119,6 +155,7 @@ const mock = createServer(async (req, res) => {
       const patch =
         {
           identity: { identity: 'wrong-identity' },
+          fingerprint: { fingerprint: 'f'.repeat(64) },
           payer: { payer: other.address },
           recipient: { recipient: other.address },
           asset: { asset: other.address },
@@ -160,7 +197,10 @@ const mock = createServer(async (req, res) => {
       const which = path === '/verify' ? scenario.verify : scenario.settle
       if (path === '/verify') {
         if (onVerify) await onVerify()
-        if (which === 'timeout') await delay(1500)
+        if (which === 'timeout') {
+          await new Promise((resolve) => res.once('close', resolve))
+          return
+        }
         if (which === 'drop') return req.socket.destroy()
         if (which === 'http')
           return send(res, { error: 'LOCAL MOCK HTTP ERROR' }, 503)
@@ -208,6 +248,7 @@ const mock = createServer(async (req, res) => {
         ledger.set(key, {
           localSimulationOnly: true,
           identity: key,
+          fingerprint: fingerprint(p),
           network,
           asset,
           recipient: reqs.payTo,
@@ -221,6 +262,7 @@ const mock = createServer(async (req, res) => {
         ledger.set(key, {
           localSimulationOnly: true,
           identity: key,
+          fingerprint: fingerprint(p),
           network,
           asset,
           recipient: reqs.payTo,
@@ -255,10 +297,12 @@ const mock = createServer(async (req, res) => {
           internalDiagnostic: 'LOCAL_PRIVATE_DIAGNOSTIC',
         },
       }
+      chainFixtures.set(key, chainFixture(p, settlement, asset, localNow()))
       lastTransaction = transaction
       ledger.set(key, {
         localSimulationOnly: true,
         identity: key,
+        fingerprint: fingerprint(p),
         network,
         asset,
         recipient: reqs.payTo,
@@ -268,7 +312,10 @@ const mock = createServer(async (req, res) => {
         settlement,
       })
       if (onSettle) await onSettle()
-      if (which === 'timeout') await delay(1500)
+      if (which === 'timeout') {
+        await new Promise((resolve) => res.once('close', resolve))
+        return
+      }
       if (which === 'drop') return req.socket.destroy()
       if (which === 'http')
         return send(
@@ -406,6 +453,7 @@ await new Promise((done, reject) => {
 })
 const mockOrigin = `http://127.0.0.1:${mock.address().port}`
 const state = await mkdtemp(join(root, '.wrangler/sg05-state-'))
+let productionProbeHeader = ''
 let runtime,
   ordinary,
   passed = 0,
@@ -558,6 +606,7 @@ try {
     '0005_sg07_persistent_quarantine.sql',
     '0006_sg07_api_budget.sql',
     '0007_sg07_settlement_observations.sql',
+    '0008_sg07_settlement_journal_integrity.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   assert.equal(
@@ -592,959 +641,1720 @@ try {
   pass(
     'Foundation/CDP modules load with explicit empty-credential guard; local opt-in, host and deployment guards block public/live egress',
   )
-  const r = await seed(),
-    t = await issue(r)
-  assert.equal(count('/verify'), 0)
-  assert.equal(count('/settle'), 0)
-  assert.equal(count('/upstream'), 0)
-  const same = await fetch(t.url)
-  assert.equal(same.status, 402)
-  assert.deepEqual(await same.json(), t.challenge)
-  assert.equal(
-    (await (await fetch(`${runtime.origin}/api/resources`)).json()).error,
-    'Sign in with Ethereum to continue',
-  )
-  pass(
-    'unpaid buyer needs no merchant SIWE; durable Base-native USDC upfront challenge repeats without verification, settlement or upstream',
-  )
-  const good = await signed(t),
-    ok = await submit(t, good, 200)
-  assert.equal(ok.body.localSimulationOnly, true)
-  assert.equal(ok.body.data.message, 'LOCAL protected JSON fixture')
-  const evidence = JSON.parse(
-    Buffer.from(ok.r.headers.get('payment-response'), 'base64'),
-  )
-  conflictTransaction = evidence.transaction
-  assert.equal(evidence.success, true)
-  assert.equal(evidence.extra.localSimulationOnly, true)
-  assert.equal(evidence.extra.internalDiagnostic, undefined)
-  assert.equal(evidence.extra.asset, asset)
-  assert.equal(evidence.extra.recipient, t.challenge.accepts[0].payTo)
-  assert.deepEqual(JSON.parse((await receipts(t))[0].settlement_json), evidence)
-  assert.equal(count('/verify'), 1)
-  assert.equal(count('/settle'), 1)
-  assert.equal(count('/upstream'), 1)
-  assert.equal((await attempt(t)).phase, 'fulfilled')
-  assert.equal((await receipts(t)).length, 1)
-  assert.equal((await receipts(t))[0].evidence_kind, 'local_simulation')
-  assert.equal((await receipts(t))[0].block_number, 'LOCAL_SIMULATION_ONLY')
-  const baseline = calls.length
-  await submit(t, good, 409)
-  assert.equal(calls.length, baseline)
-  pass(
-    'genuine local EIP3009 signature → facilitator verification → simulated settlement → atomic D1 receipt/analytics → JSON; replay returns no content',
-  )
-  const q = await issue(r),
-    qp = await signed(q)
-  const before = {
-    v: count('/verify'),
-    s: count('/settle'),
-    u: count('/upstream'),
-  }
-  const outcomes = await Promise.all(
-    Array.from({ length: 6 }, () =>
-      fetch(q.url, { headers: { 'PAYMENT-SIGNATURE': qp.header } }),
-    ),
-  )
-  assert.equal(outcomes.filter((x) => x.status === 200).length, 1)
-  assert.equal(outcomes.filter((x) => x.status === 409).length, 5)
-  for (const response of outcomes) await response.arrayBuffer()
-  assert.equal(count('/verify') - before.v, 1)
-  assert.equal(count('/settle') - before.s, 1)
-  assert.equal(count('/upstream') - before.u, 1)
-  assert.equal((await receipts(q)).length, 1)
-  pass(
-    'six concurrent paid requests produce exactly one verify, settlement initiator, receipt and protected response',
-  )
-
-  // More cases below keep using fresh resources/attempts in this same isolated database.
-  reset()
-  {
-    const t = await issue(await seed()),
-      p = await signed(t)
-    const alias = { ...t, url: `${runtime.origin}/sg05/pay/${t.resource}` }
-    const s = count('/settle'),
-      u = count('/upstream')
-    await submit(alias, p, 200)
+  if (!process.argv.includes('--internal-json-only')) {
+    const r = await seed(),
+      t = await issue(r)
+    assert.equal(count('/verify'), 0)
+    assert.equal(count('/settle'), 0)
+    assert.equal(count('/upstream'), 0)
+    const same = await fetch(t.url)
+    assert.equal(same.status, 402)
+    assert.deepEqual(await same.json(), t.challenge)
+    assert.equal(
+      (await (await fetch(`${runtime.origin}/api/resources`)).json()).error,
+      'Sign in with Ethereum to continue',
+    )
+    pass(
+      'unpaid buyer needs no merchant SIWE; durable Base-native USDC upfront challenge repeats without verification, settlement or upstream',
+    )
+    const good = await signed(t),
+      ok = await submit(t, good, 200)
+    productionProbeHeader = good.header
+    assert.equal(ok.body.localSimulationOnly, true)
+    assert.equal(ok.body.data.message, 'LOCAL protected JSON fixture')
+    const evidence = JSON.parse(
+      Buffer.from(ok.r.headers.get('payment-response'), 'base64'),
+    )
+    conflictTransaction = evidence.transaction
+    assert.equal(evidence.success, true)
+    assert.equal(evidence.extra.localSimulationOnly, true)
+    assert.equal(evidence.extra.internalDiagnostic, undefined)
+    assert.equal(evidence.extra.asset, asset)
+    assert.equal(evidence.extra.recipient, t.challenge.accepts[0].payTo)
+    assert.deepEqual(
+      JSON.parse((await receipts(t))[0].settlement_json),
+      evidence,
+    )
+    assert.equal(count('/verify'), 1)
+    assert.equal(count('/settle'), 1)
+    assert.equal(count('/upstream'), 1)
     assert.equal((await attempt(t)).phase, 'fulfilled')
-    await submit(alias, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    assert.equal(count('/upstream') - u, 1)
+    assert.equal((await receipts(t)).length, 1)
+    assert.equal((await receipts(t))[0].evidence_kind, 'local_simulation')
+    assert.equal((await receipts(t))[0].block_number, 'LOCAL_SIMULATION_ONLY')
+    const baseline = calls.length
+    await submit(t, good, 409)
+    assert.equal(calls.length, baseline)
     pass(
-      'standard original-URL x402 retry resolves only its D1-issued envelope ticket; duplicate retry cannot settle or fulfill again',
+      'genuine local EIP3009 signature → facilitator verification → simulated settlement → atomic D1 receipt/analytics → JSON; replay returns no content',
     )
-  }
-  for (const [name, transform] of [
-    ['x402 version', (p) => (p.x402Version = 1)],
-    ['scheme', (p) => (p.accepted.scheme = 'upto')],
-    ['network', (p) => (p.accepted.network = 'eip155:0')],
-    ['non-native asset', (p) => (p.accepted.asset = other.address)],
-    ['amount', (p) => (p.accepted.amount = '1001')],
-    ['payee', (p) => (p.accepted.payTo = other.address)],
-    [
-      'resource identity',
-      (p) => (p.resource = { ...p.resource, url: p.resource.url + '/changed' }),
-    ],
-    ['authorization value', (p) => (p.payload.authorization.value = '1001')],
-    [
-      'authorization recipient',
-      (p) => (p.payload.authorization.to = other.address),
-    ],
-    [
-      'expired authorization',
-      (p) =>
-        (p.payload.authorization.validBefore = String(
-          Math.floor(localNow() / 1000) - 1,
-        )),
-    ],
-    [
-      'future authorization',
-      (p) =>
-        (p.payload.authorization.validAfter = String(
-          Math.floor(localNow() / 1000) + 30,
-        )),
-    ],
-  ]) {
-    reset()
-    const n = await issue(await seed()),
-      p = await signed(n, transform)
-    const v = count('/verify'),
-      s = count('/settle'),
-      u = count('/upstream')
-    await submit(n, p, 402)
-    assert.equal(count('/verify'), v)
-    assert.equal(count('/settle'), s)
-    assert.equal(count('/upstream'), u)
-    await noPayment(n)
-    pass(
-      `rejects ${name} before facilitator or content; no receipt/settlement analytics`,
-    )
-  }
-  for (const [name, header, status] of [
-    ['malformed base64', '!', 400],
-    ['malformed JSON', Buffer.from('{').toString('base64'), 400],
-    ['oversized payment header', 'a'.repeat(8200), 413],
-    [
-      'nested JSON',
-      Buffer.from('['.repeat(10) + '1' + ']'.repeat(10)).toString('base64'),
-      413,
-    ],
-    [
-      'collection',
-      Buffer.from(JSON.stringify(Array.from({ length: 65 }, () => 1))).toString(
-        'base64',
+    const q = await issue(r),
+      qp = await signed(q)
+    const before = {
+      v: count('/verify'),
+      s: count('/settle'),
+      u: count('/upstream'),
+    }
+    const outcomes = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        fetch(q.url, { headers: { 'PAYMENT-SIGNATURE': qp.header } }),
       ),
-      413,
-    ],
-    [
-      'large string',
-      Buffer.from(JSON.stringify({ value: 'x'.repeat(3000) })).toString(
-        'base64',
-      ),
-      413,
-    ],
-    [
-      'node count',
-      Buffer.from(
-        JSON.stringify(
-          Array.from({ length: 32 }, () => Array.from({ length: 32 }, () => 1)),
-        ),
-      ).toString('base64'),
-      413,
-    ],
-  ]) {
-    const n = await issue(await seed()),
-      s = count('/settle')
-    await submit(n, header, status)
-    assert.equal(count('/settle'), s)
-    await noPayment(n)
-    pass(`bounded parsing rejects ${name} before SDK validation/settlement`)
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n, () => {}, other),
-      s = count('/settle')
-    await submit(n, p, 402)
-    assert.equal(count('/settle'), s)
-    assert.equal((await attempt(n)).phase, 'rejected')
-    await noPayment(n)
+    )
+    assert.equal(outcomes.filter((x) => x.status === 200).length, 1)
+    assert.equal(outcomes.filter((x) => x.status === 409).length, 5)
+    for (const response of outcomes) await response.arrayBuffer()
+    assert.equal(count('/verify') - before.v, 1)
+    assert.equal(count('/settle') - before.s, 1)
+    assert.equal(count('/upstream') - before.u, 1)
+    assert.equal((await receipts(q)).length, 1)
     pass(
-      'authoritative local facilitator cryptographically rejects a signature from a different local key',
+      'six concurrent paid requests produce exactly one verify, settlement initiator, receipt and protected response',
     )
-  }
-  for (const verify of [
-    'reject',
-    'contradictory',
-    'wrong-payer',
-    'malformed',
-    'large',
-    'http',
-    'timeout',
-    'drop',
-  ]) {
-    reset()
-    mode.verify = verify
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle'),
-      u = count('/upstream')
-    await submit(
-      n,
-      p,
-      ['reject', 'contradictory', 'wrong-payer'].includes(verify) ? 402 : 502,
-    )
-    assert.equal(count('/settle'), s)
-    assert.equal(count('/upstream'), u)
-    await noPayment(n)
-    pass(`facilitator verification ${verify} never settles or releases content`)
-  }
-  reset()
-  {
-    const n = await issue(await seed(other.address)),
-      original = structuredClone(good.payload)
-    original.resource = n.challenge.resource
-    original.accepted = n.challenge.accepts[0]
-    const v = count('/verify')
-    await submit(n, { header: encodePaymentSignatureHeader(original) }, 409)
-    assert.equal(count('/verify'), v)
-    assert.equal((await attempt(n)).phase, 'rejected')
-    await noPayment(n)
-    pass(
-      'same EIP3009 identity cannot be replayed across resource and merchant boundaries, despite matching price/payee',
-    )
-  }
-  for (const settle of [
-    'reject',
-    'ambiguous',
-    'malformed',
-    'http',
-    'drop',
-    'wrong-network',
-    'wrong-asset',
-    'wrong-recipient',
-    'wrong-amount',
-    'wrong-payer',
-    'empty-hash',
-    'zero-hash',
-    'null',
-    'pending-hash',
-    'false-with-hash',
-    'redirect',
-    'conflict',
-  ]) {
-    reset()
-    mode.settle = settle
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle'),
-      u = count('/upstream')
-    const rejected = await submit(n, p, 503)
-    assert.equal(count('/settle') - s, 1, rejected.body.error)
-    assert.equal(count('/upstream'), u)
-    await noPayment(n)
-    assert.equal(
-      (await attempt(n)).phase,
-      settle === 'reject' ? 'failed' : 'settlement_unknown',
-    )
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      `settlement ${settle} persists ${settle === 'reject' ? 'definitive failure' : 'unknown outcome'} without a fabricated receipt, fulfillment or automatic resubmission`,
-    )
-  }
-  reset()
-  {
-    mode.settle = 'timeout'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await submit(n, p, 503)
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    await noPayment(n)
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    mode = { reconcile: 'mismatch' }
-    const bad = await fetch(`${runtime.origin}/sg05/control`, {
-      method: 'POST',
-      headers: {
-        Origin: runtime.origin,
-        'X-Local-Only': 'yes',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ action: 'reconcile', id: n.id }),
-    })
-    assert.equal(bad.status, 503)
-    await bad.arrayBuffer()
-    await noPayment(n)
-    mode = {}
-    assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
-    assert.equal((await receipts(n)).length, 1)
-    const forged = structuredClone(p.payload)
-    forged.payload.signature = '0x' + '11'.repeat(65)
-    await submit(n, { header: encodePaymentSignatureHeader(forged) }, 409)
-    assert.equal((await attempt(n)).phase, 'settled')
-    await submit(n, p, 200)
-    assert.equal(count('/settle') - s, 1)
-    await submit(n, p, 409)
-    pass(
-      'timeout after possible submission reconciles only from server-side local ledger evidence; resumes fulfillment without a second settlement',
-    )
-  }
-  reset()
-  {
-    mode.settle = 'drop-not-submitted'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await submit(n, p, 503)
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    reset()
-    assert.equal((await control('reconcile', { id: n.id })).outcome, 'failed')
-    await noPayment(n)
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'authoritative local not-submitted reconciliation resolves unknown to failed without a receipt or another charge',
-    )
-  }
-  for (const field of ['price_atomic', 'payout_address', 'enabled']) {
-    reset()
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await control('mutate', {
-      id: n.resource,
-      field,
-      value:
-        field === 'enabled'
-          ? 0
-          : field === 'price_atomic'
-            ? '2000'
-            : other.address,
-    })
-    await submit(n, p, 409)
-    assert.equal(count('/settle'), s)
-    await noPayment(n)
-    pass(`challenge becomes unusable after persisted ${field} change`)
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await control('mutate', { id: n.resource, field: 'enabled', value: 0 })
-    await control('mutate', { id: n.resource, field: 'enabled', value: 1 })
-    await submit(n, p, 409)
-    assert.equal(count('/settle'), s)
-    pass(
-      'monotonic D1 revision rejects disable/re-enable ABA even when configuration values are restored',
-    )
-  }
-  for (const patch of [
-    { owner: other.address },
-    { version: '2' },
-    { enabled: false },
-    { pendingOwner: other.address },
-    { observedAt: 1 },
-    { configHash: '0x' + '00'.repeat(32) },
-    { payout: other.address },
-    { priceAtomic: '2000' },
-  ]) {
-    reset()
-    const id = await seed()
-    await control('registryPatch', { id, patch })
-    const before = count('/settle')
-    const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
-    assert.equal(response.status, 409)
-    await response.arrayBuffer()
-    assert.equal(count('/settle'), before)
-    pass(
-      `simulated registry mismatch (${Object.keys(patch)[0]}) fails closed before issuing a payable challenge`,
-    )
-  }
-  for (const bindingMode of ['delete', 'stale', 'unconfirmed']) {
-    const id = await seed()
-    await control('binding', { id, mode: bindingMode })
-    const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
-    assert.equal(response.status, 503)
-    await response.arrayBuffer()
-    pass(`missing/unusable registry binding ${bindingMode} fails closed`)
-  }
-  for (const value of [
-    'http://127.0.0.1/',
-    'https://127.0.0.1/',
-    'https://0x7f000001/',
-    'https://[::1]/',
-    'https://169.254.169.254/',
-    'https://10.0.0.1/',
-    'https://user:password@example.com/',
-    'https://example.com:8443/',
-  ]) {
-    reset()
-    const id = await seed(),
-      u = count('/upstream')
-    await control('mutate', { id, field: 'upstream_url', value })
-    const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
-    assert.notEqual(response.status, 402)
-    assert.notEqual(response.status, 200)
-    await response.arrayBuffer()
-    assert.equal(count('/upstream'), u)
-  }
-  pass(
-    'existing HTTPS validator remains enforced for local/private/link-local/IPv6/alternate-IP URLs, credentials and ports; production has no DNS-unsafe fetch transport',
-  )
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onVerify = () =>
-      control('mutate', { id: n.resource, field: 'enabled', value: 0 })
-    await submit(n, p, 409)
-    assert.equal(count('/settle'), s)
-    await noPayment(n)
-    assert.equal((await attempt(n)).phase, 'failed')
-    pass('disable during facilitator verification aborts before settlement')
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      settledBefore = count('/settle')
-    onVerify = () => control('binding', { id: n.resource, mode: 'unconfirmed' })
-    await submit(n, p, 503)
-    assert.equal(count('/settle'), settledBefore)
-    await noPayment(n)
-    assert.equal((await attempt(n)).phase, 'failed')
-    pass(
-      'registry invalidation after challenge and during verification blocks settlement and content',
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n)
-    onUpstream = () =>
-      control('binding', { id: n.resource, mode: 'unconfirmed' })
-    await submit(n, p, 503)
-    assert.equal((await receipts(n)).length, 1)
-    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
-    pass(
-      'registry invalidation before content release preserves prior simulated settlement evidence and rejects delivery',
-    )
-  }
 
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      u = count('/upstream')
-    onSettle = () =>
-      control('mutate', { id: n.resource, field: 'enabled', value: 0 })
-    await submit(n, p, 409)
-    assert.equal(count('/upstream'), u)
-    assert.equal((await receipts(n)).length, 1)
-    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
-    pass(
-      'disable during settlement retains genuine simulated settlement evidence but never fetches or releases protected content',
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n)
-    onUpstream = async () => {
-      await control('mutate', { id: n.resource, field: 'enabled', value: 0 })
-      await control('mutate', { id: n.resource, field: 'enabled', value: 1 })
-    }
-    await submit(n, p, 409)
-    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
-    pass(
-      'final D1 revision gate prevents delivery when configuration changes during upstream execution',
-    )
-  }
-  reset()
-  {
-    const id = await seed(),
-      before = await inspect(),
-      s = count('/settle'),
-      v = count('/verify'),
-      u = count('/upstream'),
-      supported = count('/supported')
-    await control('denyUpstream', { id })
-    const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
-    assert.equal(response.status, 503)
-    assert.equal((await response.json()).error, 'upstream_not_eligible')
-    assert.equal((await inspect()).attempts.length, before.attempts.length)
-    assert.equal(count('/settle'), s)
-    assert.equal(count('/verify'), v)
-    assert.equal(count('/upstream'), u)
-    assert.equal(count('/supported'), supported)
-    pass(
-      'known-ineligible upstream creates no payable challenge, D1 attempt, facilitator request or charge',
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle'),
-      v = count('/verify')
-    await control('denyUpstream', { id: n.resource })
-    await submit(n, p, 503)
-    assert.equal(count('/verify'), v)
-    assert.equal(count('/settle'), s)
-    await noPayment(n)
-    pass(
-      'eligibility revoked after challenge is rejected before facilitator verification or settlement',
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onVerify = () => control('denyUpstream', { id: n.resource })
-    await submit(n, p, 503)
-    assert.equal(count('/settle'), s)
-    await noPayment(n)
-    assert.equal((await attempt(n)).phase, 'failed')
-    pass(
-      'eligibility revoked during verification is rechecked before settlement; no receipt is fabricated',
-    )
-  }
-  reset()
-  {
-    mode.upstream = 'cache-poison'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onUpstream = async () => {
-      assert.equal((await receipts(n)).length, 1)
-      assert.equal((await attempt(n)).phase, 'fulfilling')
-    }
-    const result = await submit(n, p, 200, {
-      headers: {
-        'PAYMENT-SIGNATURE': p.header,
-        Authorization: 'Bearer LOCAL_TEST_ONLY',
-        Cookie: 'local_buyer_marker=1',
-        'PAYMENT-REQUIRED': 'LOCAL_TEST_ONLY',
-      },
-    })
-    assert.equal(result.r.headers.get('set-cookie'), null)
-    assert.equal(result.r.headers.get('x-upstream-private'), null)
-    assert.equal(
-      result.r.headers.get('cache-control'),
-      'private, no-store, max-age=0',
-    )
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'content is requested only after persisted settlement; buyer headers and upstream cookies/cache headers cannot cross the boundary',
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onUpstream = () => control('denyUpstream', { id: n.resource })
-    await submit(n, p, 503)
-    assert.equal((await receipts(n)).length, 1)
-    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
-    assert.equal((await attempt(n)).status, 'settled')
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'post-settlement eligibility failure retains settled receipt/status and denies content without another charge',
-    )
-  }
-  for (const upstream of [
-    'error',
-    'timeout',
-    'drop',
-    'redirect',
-    'content-type',
-    'malformed',
-    'large',
-    'stream-large',
-    'slow-body',
-    'depth',
-    'collection',
-  ]) {
+    // More cases below keep using fresh resources/attempts in this same isolated database.
     reset()
-    mode.upstream = upstream
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await submit(
-      n,
-      p,
-      upstream === 'timeout' || upstream === 'slow-body'
-        ? 504
-        : upstream === 'depth' || upstream === 'collection'
-          ? 413
-          : upstream === 'malformed'
-            ? 400
-            : upstream === 'drop'
-              ? 503
-              : 502,
-    )
-    assert.equal((await attempt(n)).phase, 'fulfillment_failed')
-    assert.equal((await receipts(n)).length, 1)
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      `upstream ${upstream} never releases content or retries payment; settled evidence is retained`,
-    )
-  }
-  for (const fault of ['claim', 'receipt', 'release']) {
-    reset()
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await control('fault', { mode: fault })
-    await submit(n, p, 503)
-    await control('fault', { mode: 'off' })
-    assert.equal(count('/settle') - s, fault === 'claim' ? 0 : 1)
-    if (fault === 'receipt') {
-      assert.equal((await attempt(n)).phase, 'settlement_unknown')
-      await noPayment(n)
-    }
-    if (fault === 'claim') {
-      assert.equal((await attempt(n)).phase, 'created')
-      await noPayment(n)
-    }
-    if (fault === 'release') {
-      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
-      assert.equal((await receipts(n)).length, 1)
-    }
-    pass(
-      `actual local D1 trigger abort during ${fault} fails closed; receipt and analytics rollback atomically where applicable`,
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed())
-    assert.equal(
-      (await control('illegalTransition', { id: n.id })).blocked,
-      true,
-    )
-    assert.equal((await attempt(n)).phase, 'created')
-    const response = await fetch(n.url, {
-      headers: { 'PAYMENT-RESPONSE': '0xCLIENT_HASH_IS_NOT_PROOF' },
-    })
-    assert.equal(response.status, 402)
-    await response.arrayBuffer()
-    await noPayment(n)
-    const malformedTicket = n.url.replace(
-      /ticket=(.)/,
-      (_, c) => `ticket=${c === 'f' ? 'e' : 'f'}`,
-    )
-    const missing = await fetch(malformedTicket)
-    assert.equal(missing.status, 404)
-    await missing.arrayBuffer()
-    await control('expire', { id: n.id })
-    const p = await signed(n)
-    await submit(n, p, 402)
-    await noPayment(n)
-    pass(
-      'D1 rejects illegal transitions; client receipt/hash, altered request ticket and expired challenges confer no authority',
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n)
-    const response = await fetch(n.url, {
-      method: 'POST',
-      headers: { 'PAYMENT-SIGNATURE': p.header },
-      body: 'x'.repeat(17000),
-    })
-    assert.equal(response.status, 405)
-    await response.arrayBuffer()
-    await submit(n, p, 413, {
-      headers: { 'PAYMENT-SIGNATURE': p.header, 'X-Large': 'x'.repeat(16384) },
-    })
-    const long = await fetch(
-      `${runtime.origin}/sg05/pay/${n.resource}?x=${'x'.repeat(2048)}`,
-    )
-    assert.equal(long.status, 414)
-    await long.arrayBuffer()
-    await noPayment(n)
-    pass(
-      'unsupported methods, oversized total headers/body and URLs cannot initiate payment',
-    )
-  }
-  reset()
-  {
-    mode.settle = 'timeout'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    let observed
-    const submitted = new Promise((resolve) => {
-      observed = resolve
-    })
-    onSettle = () => observed()
-    const pending = fetch(n.url, { headers: { 'PAYMENT-SIGNATURE': p.header } })
-      .then((r) => r.arrayBuffer())
-      .catch(() => null)
-    await submitted
-    const port = Number(new URL(runtime.origin).port)
-    await runtime.close('SIGKILL')
-    await pending
-    reset()
-    runtime = await localRuntime({
-      statePath: state,
-      includeApp: true,
-      fixture,
-      listenPort: port,
-    })
-    assert.deepEqual((await runtime.control('migrate')).applied, [])
-    assert.equal((await attempt(n)).phase, 'settlement_pending')
-    await control('expire', { id: n.id })
-    await control('recover')
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
-    await control('reconcile', { id: n.id })
-    await submit(n, p, 200)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'real Pages process interruption preserves pending D1 state; restart recovery reconciles without another settlement and fulfills once',
-    )
-  }
-  reset()
-  {
-    mode.supported = 'wrong'
-    const id = await seed()
-    const r = await fetch(`${runtime.origin}/sg05/pay/${id}`)
-    assert.equal(r.status, 503)
-    await r.arrayBuffer()
-    pass('facilitator discovery without Base exact support fails closed')
-  }
-  // Settlement reliability continuation: all data and facilitator evidence remain local simulations.
-  for (const action of ['expireOperation', 'expire']) {
-    reset()
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onVerify = () => control(action, { id: n.id })
-    await submit(n, p, 409)
-    assert.equal(count('/settle'), s)
-    assert.equal((await attempt(n)).phase, 'failed')
-    await noPayment(n)
-    pass(
-      `persisted ${action} during verification prevents a late settlement CAS`,
-    )
-  }
-  for (const clock of ['backward', 'forward', 'malformed', 'failure']) {
-    reset()
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onVerify = () => {
-      if (clock === 'backward') mode.clockOffset = -10000
-      else if (clock === 'forward') mode.clockOffset = 100000
-      else mode.clock = clock
-    }
-    const response = await fetch(n.url, {
-      headers: { 'PAYMENT-SIGNATURE': p.header },
-    })
-    assert.notEqual(response.status, 200)
-    assert.equal(response.headers.get('payment-response'), null)
-    await response.arrayBuffer()
-    assert.equal(count('/settle'), s)
-    reset()
-    await noPayment(n)
-    await control('expireOperation', { id: n.id })
-    await control('recover')
-    assert.equal((await attempt(n)).phase, 'failed')
-    pass(
-      `clock ${clock} during verification fails closed without settlement; durable recovery remains terminal`,
-    )
-  }
-  reset()
-  {
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    onSettle = () => {
-      mode.clock = 'malformed'
-    }
-    await submit(n, p, 503)
-    reset()
-    assert.equal((await attempt(n)).phase, 'settlement_pending')
-    await noPayment(n)
-    await control('expireOperation', { id: n.id })
-    await control('recover')
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    await submit(n, p, 409)
-    assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
-    await submit(n, p, 200)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'clock failure after submission leaves a durable pending claim; recovery admits local evidence without charging again',
-    )
-  }
-  reset()
-  {
-    mode.settle = 'timeout'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    const abort = new AbortController()
-    onSettle = () => abort.abort()
-    const canceled = await fetch(n.url, {
-      signal: abort.signal,
-      headers: { 'PAYMENT-SIGNATURE': p.header },
-    })
-      .then((r) => r.arrayBuffer())
-      .catch(() => null)
-    assert.equal(canceled, null)
-    await delay(1100)
-    assert.ok(
-      ['settlement_pending', 'settlement_unknown'].includes(
-        (await attempt(n)).phase,
-      ),
-    )
-    await noPayment(n)
-    reset()
-    await control('expireOperation', { id: n.id })
-    await control('recover')
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
-    await submit(n, p, 200)
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'buyer disconnect after submission retains uncertainty; local reconciliation and delivery do not resubmit settlement',
-    )
-  }
-  const reconcileRequest = (id) =>
-    fetch(`${runtime.origin}/sg05/control`, {
-      method: 'POST',
-      headers: {
-        Origin: runtime.origin,
-        'X-Local-Only': 'yes',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ action: 'reconcile', id }),
-    })
-  reset()
-  {
-    mode.settle = 'drop'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await submit(n, p, 503)
-    for (const bad of [
-      'identity',
-      'payer',
-      'recipient',
-      'asset',
-      'network',
-      'amount',
-      'contradictory',
-      'malformed',
-      'provenance',
-    ]) {
-      mode = { reconcile: bad }
-      const result = await reconcileRequest(n.id)
-      assert.equal(result.status, 503, bad)
-      await result.arrayBuffer()
-      assert.equal((await attempt(n)).phase, 'settlement_unknown')
-      await noPayment(n)
+    {
+      const t = await issue(await seed()),
+        p = await signed(t)
+      const alias = { ...t, url: `${runtime.origin}/sg05/pay/${t.resource}` }
+      const s = count('/settle'),
+        u = count('/upstream')
+      await submit(alias, p, 200)
+      assert.equal((await attempt(t)).phase, 'fulfilled')
+      await submit(alias, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      assert.equal(count('/upstream') - u, 1)
       pass(
-        `reconciliation ${bad} cannot alter unknown state, create a receipt or release content`,
+        'standard original-URL x402 retry resolves only its D1-issued envelope ticket; duplicate retry cannot settle or fulfill again',
       )
     }
-    mode = { reconcile: 'wrong' }
-    assert.equal(
-      (await control('reconcile', { id: n.id })).outcome,
-      'settlement_unknown',
-    )
-    await noPayment(n)
+    for (const [name, transform] of [
+      ['x402 version', (p) => (p.x402Version = 1)],
+      ['scheme', (p) => (p.accepted.scheme = 'upto')],
+      ['network', (p) => (p.accepted.network = 'eip155:0')],
+      ['non-native asset', (p) => (p.accepted.asset = other.address)],
+      ['amount', (p) => (p.accepted.amount = '1001')],
+      ['payee', (p) => (p.accepted.payTo = other.address)],
+      [
+        'resource identity',
+        (p) =>
+          (p.resource = { ...p.resource, url: p.resource.url + '/changed' }),
+      ],
+      ['authorization value', (p) => (p.payload.authorization.value = '1001')],
+      [
+        'authorization recipient',
+        (p) => (p.payload.authorization.to = other.address),
+      ],
+      [
+        'expired authorization',
+        (p) =>
+          (p.payload.authorization.validBefore = String(
+            Math.floor(localNow() / 1000) - 1,
+          )),
+      ],
+      [
+        'future authorization',
+        (p) =>
+          (p.payload.authorization.validAfter = String(
+            Math.floor(localNow() / 1000) + 30,
+          )),
+      ],
+    ]) {
+      reset()
+      const n = await issue(await seed()),
+        p = await signed(n, transform)
+      const v = count('/verify'),
+        s = count('/settle'),
+        u = count('/upstream')
+      await submit(n, p, 402)
+      assert.equal(count('/verify'), v)
+      assert.equal(count('/settle'), s)
+      assert.equal(count('/upstream'), u)
+      await noPayment(n)
+      pass(
+        `rejects ${name} before facilitator or content; no receipt/settlement analytics`,
+      )
+    }
+    for (const [name, header, status] of [
+      ['malformed base64', '!', 400],
+      ['malformed JSON', Buffer.from('{').toString('base64'), 400],
+      ['oversized payment header', 'a'.repeat(8200), 413],
+      [
+        'nested JSON',
+        Buffer.from('['.repeat(10) + '1' + ']'.repeat(10)).toString('base64'),
+        413,
+      ],
+      [
+        'collection',
+        Buffer.from(
+          JSON.stringify(Array.from({ length: 65 }, () => 1)),
+        ).toString('base64'),
+        413,
+      ],
+      [
+        'large string',
+        Buffer.from(JSON.stringify({ value: 'x'.repeat(3000) })).toString(
+          'base64',
+        ),
+        413,
+      ],
+      [
+        'node count',
+        Buffer.from(
+          JSON.stringify(
+            Array.from({ length: 32 }, () =>
+              Array.from({ length: 32 }, () => 1),
+            ),
+          ),
+        ).toString('base64'),
+        413,
+      ],
+    ]) {
+      const n = await issue(await seed()),
+        s = count('/settle')
+      await submit(n, header, status)
+      assert.equal(count('/settle'), s)
+      await noPayment(n)
+      pass(`bounded parsing rejects ${name} before SDK validation/settlement`)
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n, () => {}, other),
+        s = count('/settle')
+      await submit(n, p, 402)
+      assert.equal(count('/settle'), s)
+      assert.equal((await attempt(n)).phase, 'rejected')
+      await noPayment(n)
+      pass(
+        'authoritative local facilitator cryptographically rejects a signature from a different local key',
+      )
+    }
+    for (const verify of [
+      'reject',
+      'contradictory',
+      'wrong-payer',
+      'malformed',
+      'large',
+      'http',
+      'timeout',
+      'drop',
+    ]) {
+      reset()
+      mode.verify = verify
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle'),
+        u = count('/upstream')
+      await submit(
+        n,
+        p,
+        ['reject', 'contradictory', 'wrong-payer'].includes(verify) ? 402 : 502,
+      )
+      assert.equal(count('/settle'), s)
+      assert.equal(count('/upstream'), u)
+      await noPayment(n)
+      pass(
+        `facilitator verification ${verify} never settles or releases content`,
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed(other.address)),
+        original = structuredClone(good.payload)
+      original.resource = n.challenge.resource
+      original.accepted = n.challenge.accepts[0]
+      const v = count('/verify')
+      await submit(n, { header: encodePaymentSignatureHeader(original) }, 409)
+      assert.equal(count('/verify'), v)
+      assert.equal((await attempt(n)).phase, 'rejected')
+      await noPayment(n)
+      pass(
+        'same EIP3009 identity cannot be replayed across resource and merchant boundaries, despite matching price/payee',
+      )
+    }
+    for (const settle of [
+      'reject',
+      'ambiguous',
+      'malformed',
+      'http',
+      'drop',
+      'wrong-network',
+      'wrong-asset',
+      'wrong-recipient',
+      'wrong-amount',
+      'wrong-payer',
+      'empty-hash',
+      'zero-hash',
+      'null',
+      'pending-hash',
+      'false-with-hash',
+      'redirect',
+      'conflict',
+    ]) {
+      reset()
+      mode.settle = settle
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle'),
+        u = count('/upstream')
+      const rejected = await submit(n, p, 503)
+      assert.equal(count('/settle') - s, 1, rejected.body.error)
+      assert.equal(count('/upstream'), u)
+      await noPayment(n)
+      assert.equal(
+        (await attempt(n)).phase,
+        settle === 'reject' ? 'failed' : 'settlement_unknown',
+      )
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        `settlement ${settle} persists ${settle === 'reject' ? 'definitive failure' : 'unknown outcome'} without a fabricated receipt, fulfillment or automatic resubmission`,
+      )
+    }
+    reset()
+    {
+      mode.settle = 'timeout'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await submit(n, p, 503)
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      mode = { reconcile: 'mismatch' }
+      const bad = await fetch(`${runtime.origin}/sg05/control`, {
+        method: 'POST',
+        headers: {
+          Origin: runtime.origin,
+          'X-Local-Only': 'yes',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'reconcile', id: n.id }),
+      })
+      assert.equal(bad.status, 503)
+      await bad.arrayBuffer()
+      await noPayment(n)
+      mode = {}
+      assert.equal(
+        (await control('reconcile', { id: n.id })).outcome,
+        'settled',
+      )
+      assert.equal((await receipts(n)).length, 1)
+      const forged = structuredClone(p.payload)
+      forged.payload.signature = '0x' + '11'.repeat(65)
+      await submit(n, { header: encodePaymentSignatureHeader(forged) }, 409)
+      assert.equal((await attempt(n)).phase, 'settled')
+      await submit(n, p, 200)
+      assert.equal(count('/settle') - s, 1)
+      await submit(n, p, 409)
+      pass(
+        'timeout after possible submission reconciles only from server-side local ledger evidence; resumes fulfillment without a second settlement',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'drop-not-submitted'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await submit(n, p, 503)
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      reset()
+      assert.equal((await control('reconcile', { id: n.id })).outcome, 'failed')
+      await noPayment(n)
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'authoritative local not-submitted reconciliation resolves unknown to failed without a receipt or another charge',
+      )
+    }
+    for (const field of ['price_atomic', 'payout_address', 'enabled']) {
+      reset()
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await control('mutate', {
+        id: n.resource,
+        field,
+        value:
+          field === 'enabled'
+            ? 0
+            : field === 'price_atomic'
+              ? '2000'
+              : other.address,
+      })
+      await submit(n, p, 409)
+      assert.equal(count('/settle'), s)
+      await noPayment(n)
+      pass(`challenge becomes unusable after persisted ${field} change`)
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await control('mutate', { id: n.resource, field: 'enabled', value: 0 })
+      await control('mutate', { id: n.resource, field: 'enabled', value: 1 })
+      await submit(n, p, 409)
+      assert.equal(count('/settle'), s)
+      pass(
+        'monotonic D1 revision rejects disable/re-enable ABA even when configuration values are restored',
+      )
+    }
+    for (const patch of [
+      { owner: other.address },
+      { version: '2' },
+      { enabled: false },
+      { pendingOwner: other.address },
+      { observedAt: 1 },
+      { configHash: '0x' + '00'.repeat(32) },
+      { payout: other.address },
+      { priceAtomic: '2000' },
+    ]) {
+      reset()
+      const id = await seed()
+      await control('registryPatch', { id, patch })
+      const before = count('/settle')
+      const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
+      assert.equal(response.status, 409)
+      await response.arrayBuffer()
+      assert.equal(count('/settle'), before)
+      pass(
+        `simulated registry mismatch (${Object.keys(patch)[0]}) fails closed before issuing a payable challenge`,
+      )
+    }
+    for (const bindingMode of ['delete', 'stale', 'unconfirmed']) {
+      const id = await seed()
+      await control('binding', { id, mode: bindingMode })
+      const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
+      assert.equal(response.status, 503)
+      await response.arrayBuffer()
+      pass(`missing/unusable registry binding ${bindingMode} fails closed`)
+    }
+    for (const value of [
+      'http://127.0.0.1/',
+      'https://127.0.0.1/',
+      'https://0x7f000001/',
+      'https://[::1]/',
+      'https://169.254.169.254/',
+      'https://10.0.0.1/',
+      'https://user:password@example.com/',
+      'https://example.com:8443/',
+    ]) {
+      reset()
+      const id = await seed(),
+        u = count('/upstream')
+      await control('mutate', { id, field: 'upstream_url', value })
+      const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
+      assert.notEqual(response.status, 402)
+      assert.notEqual(response.status, 200)
+      await response.arrayBuffer()
+      assert.equal(count('/upstream'), u)
+    }
     pass(
-      'unknown reconciliation evidence preserves uncertainty without resubmission',
+      'existing HTTPS validator remains enforced for local/private/link-local/IPv6/alternate-IP URLs, credentials and ports; production has no DNS-unsafe fetch transport',
     )
     reset()
-    await control('fault', { mode: 'analytics' })
-    const failed = await reconcileRequest(n.id)
-    assert.equal(failed.status, 503)
-    await failed.arrayBuffer()
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    await noPayment(n)
-    await control('fault', { mode: 'off' })
-    pass(
-      'D1 analytics interruption rolls back reconciliation phase and receipt in the same batch',
-    )
-    const raced = await Promise.all([
-      reconcileRequest(n.id),
-      reconcileRequest(n.id),
-    ])
-    assert.deepEqual(raced.map((r) => r.status).sort(), [200, 409])
-    for (const result of raced) await result.arrayBuffer()
-    const records = await inspect()
-    assert.equal(
-      records.receipts.filter((r) => r.attempt_id === n.id).length,
-      1,
-    )
-    assert.equal(
-      records.analytics.filter((r) => r.attempt_id === n.id).length,
-      1,
-    )
-    assert.equal((await attempt(n)).phase, 'settled')
-    assert.equal(count('/settle') - s, 1)
-    pass(
-      'concurrent reconciliation commits exactly one receipt and analytics event using native D1 CAS',
-    )
-    const original = (await receipts(n))[0]
-    const conflicting = {
-      ...ledger.get(identity(p.payload.payload.authorization)).settlement,
-      transaction: '0x' + 'ab'.repeat(32),
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onVerify = () =>
+        control('mutate', { id: n.resource, field: 'enabled', value: 0 })
+      await submit(n, p, 409)
+      assert.equal(count('/settle'), s)
+      await noPayment(n)
+      assert.equal((await attempt(n)).phase, 'failed')
+      pass('disable during facilitator verification aborts before settlement')
     }
-    assert.equal(
-      (await control('duplicateSettlement', { id: n.id, result: conflicting }))
-        .changed,
-      false,
-    )
-    assert.deepEqual((await receipts(n))[0], original)
-    const duplicate = await reconcileRequest(n.id)
-    assert.equal(duplicate.status, 409)
-    await duplicate.arrayBuffer()
-    assert.equal((await attempt(n)).phase, 'settled')
-    await submit(n, p, 200)
-    await submit(n, p, 409)
-    assert.equal(count('/settle') - s, 1)
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        settledBefore = count('/settle')
+      onVerify = () =>
+        control('binding', { id: n.resource, mode: 'unconfirmed' })
+      await submit(n, p, 503)
+      assert.equal(count('/settle'), settledBefore)
+      await noPayment(n)
+      assert.equal((await attempt(n)).phase, 'failed')
+      pass(
+        'registry invalidation after challenge and during verification blocks settlement and content',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n)
+      onUpstream = () =>
+        control('binding', { id: n.resource, mode: 'unconfirmed' })
+      await submit(n, p, 503)
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      pass(
+        'registry invalidation before content release preserves prior simulated settlement evidence and rejects delivery',
+      )
+    }
+
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        u = count('/upstream')
+      onSettle = () =>
+        control('mutate', { id: n.resource, field: 'enabled', value: 0 })
+      await submit(n, p, 409)
+      assert.equal(count('/upstream'), u)
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      pass(
+        'disable during settlement retains genuine simulated settlement evidence but never fetches or releases protected content',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n)
+      onUpstream = async () => {
+        await control('mutate', { id: n.resource, field: 'enabled', value: 0 })
+        await control('mutate', { id: n.resource, field: 'enabled', value: 1 })
+      }
+      await submit(n, p, 409)
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      pass(
+        'final D1 revision gate prevents delivery when configuration changes during upstream execution',
+      )
+    }
+    reset()
+    {
+      const id = await seed(),
+        before = await inspect(),
+        s = count('/settle'),
+        v = count('/verify'),
+        u = count('/upstream'),
+        supported = count('/supported')
+      await control('denyUpstream', { id })
+      const response = await fetch(`${runtime.origin}/sg05/pay/${id}`)
+      assert.equal(response.status, 503)
+      assert.equal((await response.json()).error, 'upstream_not_eligible')
+      assert.equal((await inspect()).attempts.length, before.attempts.length)
+      assert.equal(count('/settle'), s)
+      assert.equal(count('/verify'), v)
+      assert.equal(count('/upstream'), u)
+      assert.equal(count('/supported'), supported)
+      pass(
+        'known-ineligible upstream creates no payable challenge, D1 attempt, facilitator request or charge',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle'),
+        v = count('/verify')
+      await control('denyUpstream', { id: n.resource })
+      await submit(n, p, 503)
+      assert.equal(count('/verify'), v)
+      assert.equal(count('/settle'), s)
+      await noPayment(n)
+      pass(
+        'eligibility revoked after challenge is rejected before facilitator verification or settlement',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onVerify = () => control('denyUpstream', { id: n.resource })
+      await submit(n, p, 503)
+      assert.equal(count('/settle'), s)
+      await noPayment(n)
+      assert.equal((await attempt(n)).phase, 'failed')
+      pass(
+        'eligibility revoked during verification is rechecked before settlement; no receipt is fabricated',
+      )
+    }
+    reset()
+    {
+      mode.upstream = 'cache-poison'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onUpstream = async () => {
+        assert.equal((await receipts(n)).length, 1)
+        assert.equal((await attempt(n)).phase, 'fulfilling')
+      }
+      const result = await submit(n, p, 200, {
+        headers: {
+          'PAYMENT-SIGNATURE': p.header,
+          Authorization: 'Bearer LOCAL_TEST_ONLY',
+          Cookie: 'local_buyer_marker=1',
+          'PAYMENT-REQUIRED': 'LOCAL_TEST_ONLY',
+        },
+      })
+      assert.equal(result.r.headers.get('set-cookie'), null)
+      assert.equal(result.r.headers.get('x-upstream-private'), null)
+      assert.equal(
+        result.r.headers.get('cache-control'),
+        'private, no-store, max-age=0',
+      )
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'content is requested only after persisted settlement; buyer headers and upstream cookies/cache headers cannot cross the boundary',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onUpstream = () => control('denyUpstream', { id: n.resource })
+      await submit(n, p, 503)
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      assert.equal((await attempt(n)).status, 'settled')
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'post-settlement eligibility failure retains settled receipt/status and denies content without another charge',
+      )
+    }
+    for (const upstream of [
+      'error',
+      'timeout',
+      'drop',
+      'redirect',
+      'content-type',
+      'malformed',
+      'large',
+      'stream-large',
+      'slow-body',
+      'depth',
+      'collection',
+    ]) {
+      reset()
+      mode.upstream = upstream
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await submit(
+        n,
+        p,
+        upstream === 'timeout' || upstream === 'slow-body'
+          ? 504
+          : upstream === 'depth' || upstream === 'collection'
+            ? 413
+            : upstream === 'malformed'
+              ? 400
+              : upstream === 'drop'
+                ? 503
+                : 502,
+      )
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      assert.equal((await receipts(n)).length, 1)
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        `upstream ${upstream} never releases content or retries payment; settled evidence is retained`,
+      )
+    }
+    for (const fault of ['claim', 'receipt', 'release']) {
+      reset()
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await control('fault', { mode: fault })
+      await submit(n, p, 503)
+      await control('fault', { mode: 'off' })
+      assert.equal(count('/settle') - s, fault === 'claim' ? 0 : 1)
+      if (fault === 'receipt') {
+        assert.equal((await attempt(n)).phase, 'settlement_unknown')
+        await noPayment(n)
+      }
+      if (fault === 'claim') {
+        assert.equal((await attempt(n)).phase, 'created')
+        await noPayment(n)
+      }
+      if (fault === 'release') {
+        assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+        assert.equal((await receipts(n)).length, 1)
+      }
+      pass(
+        `actual local D1 trigger abort during ${fault} fails closed; receipt and analytics rollback atomically where applicable`,
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed())
+      assert.equal(
+        (await control('illegalTransition', { id: n.id })).blocked,
+        true,
+      )
+      assert.equal((await attempt(n)).phase, 'created')
+      const response = await fetch(n.url, {
+        headers: { 'PAYMENT-RESPONSE': '0xCLIENT_HASH_IS_NOT_PROOF' },
+      })
+      assert.equal(response.status, 402)
+      await response.arrayBuffer()
+      await noPayment(n)
+      const malformedTicket = n.url.replace(
+        /ticket=(.)/,
+        (_, c) => `ticket=${c === 'f' ? 'e' : 'f'}`,
+      )
+      const missing = await fetch(malformedTicket)
+      assert.equal(missing.status, 404)
+      await missing.arrayBuffer()
+      await control('expire', { id: n.id })
+      const p = await signed(n)
+      await submit(n, p, 402)
+      await noPayment(n)
+      pass(
+        'D1 rejects illegal transitions; client receipt/hash, altered request ticket and expired challenges confer no authority',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n)
+      const response = await fetch(n.url, {
+        method: 'POST',
+        headers: { 'PAYMENT-SIGNATURE': p.header },
+        body: 'x'.repeat(17000),
+      })
+      assert.equal(response.status, 405)
+      await response.arrayBuffer()
+      await submit(n, p, 413, {
+        headers: {
+          'PAYMENT-SIGNATURE': p.header,
+          'X-Large': 'x'.repeat(16384),
+        },
+      })
+      const long = await fetch(
+        `${runtime.origin}/sg05/pay/${n.resource}?x=${'x'.repeat(2048)}`,
+      )
+      assert.equal(long.status, 414)
+      await long.arrayBuffer()
+      await noPayment(n)
+      pass(
+        'unsupported methods, oversized total headers/body and URLs cannot initiate payment',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'timeout'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      let observed
+      const submitted = new Promise((resolve) => {
+        observed = resolve
+      })
+      onSettle = () => observed()
+      const pending = fetch(n.url, {
+        headers: { 'PAYMENT-SIGNATURE': p.header },
+      })
+        .then((r) => r.arrayBuffer())
+        .catch(() => null)
+      await submitted
+      const port = Number(new URL(runtime.origin).port)
+      await runtime.close('SIGKILL')
+      await pending
+      reset()
+      runtime = await localRuntime({
+        statePath: state,
+        includeApp: true,
+        fixture,
+        listenPort: port,
+      })
+      assert.deepEqual((await runtime.control('migrate')).applied, [])
+      assert.equal((await attempt(n)).phase, 'settlement_pending')
+      await control('expire', { id: n.id })
+      await control('recover')
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      await control('reconcile', { id: n.id })
+      await submit(n, p, 200)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'real Pages process interruption preserves pending D1 state; restart recovery reconciles without another settlement and fulfills once',
+      )
+    }
+    reset()
+    {
+      mode.supported = 'wrong'
+      const id = await seed()
+      const r = await fetch(`${runtime.origin}/sg05/pay/${id}`)
+      assert.equal(r.status, 503)
+      await r.arrayBuffer()
+      pass('facilitator discovery without Base exact support fails closed')
+    }
+    // Settlement reliability continuation: all data and facilitator evidence remain local simulations.
+    for (const action of ['expireOperation', 'expire']) {
+      reset()
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onVerify = () => control(action, { id: n.id })
+      await submit(n, p, 409)
+      assert.equal(count('/settle'), s)
+      assert.equal((await attempt(n)).phase, 'failed')
+      await noPayment(n)
+      pass(
+        `persisted ${action} during verification prevents a late settlement CAS`,
+      )
+    }
+    for (const clock of ['backward', 'forward', 'malformed', 'failure']) {
+      reset()
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onVerify = () => {
+        if (clock === 'backward') mode.clockOffset = -10000
+        else if (clock === 'forward') mode.clockOffset = 100000
+        else mode.clock = clock
+      }
+      const response = await fetch(n.url, {
+        headers: { 'PAYMENT-SIGNATURE': p.header },
+      })
+      assert.notEqual(response.status, 200)
+      assert.equal(response.headers.get('payment-response'), null)
+      await response.arrayBuffer()
+      assert.equal(count('/settle'), s)
+      reset()
+      await noPayment(n)
+      await control('expireOperation', { id: n.id })
+      await control('recover')
+      assert.equal((await attempt(n)).phase, 'failed')
+      pass(
+        `clock ${clock} during verification fails closed without settlement; durable recovery remains terminal`,
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      onSettle = () => {
+        mode.clock = 'malformed'
+      }
+      await submit(n, p, 503)
+      reset()
+      assert.equal((await attempt(n)).phase, 'settlement_pending')
+      await noPayment(n)
+      await control('expireOperation', { id: n.id })
+      await control('recover')
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await submit(n, p, 409)
+      assert.equal(
+        (await control('reconcile', { id: n.id })).outcome,
+        'settled',
+      )
+      await submit(n, p, 200)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'clock failure after submission leaves a durable pending claim; recovery admits local evidence without charging again',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'timeout'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      const abort = new AbortController()
+      onSettle = () => abort.abort()
+      const canceled = await fetch(n.url, {
+        signal: abort.signal,
+        headers: { 'PAYMENT-SIGNATURE': p.header },
+      })
+        .then((r) => r.arrayBuffer())
+        .catch(() => null)
+      assert.equal(canceled, null)
+      await delay(1100)
+      assert.ok(
+        ['settlement_pending', 'settlement_unknown'].includes(
+          (await attempt(n)).phase,
+        ),
+      )
+      await noPayment(n)
+      reset()
+      await control('expireOperation', { id: n.id })
+      await control('recover')
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      assert.equal(
+        (await control('reconcile', { id: n.id })).outcome,
+        'settled',
+      )
+      await submit(n, p, 200)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'buyer disconnect after submission retains uncertainty; local reconciliation and delivery do not resubmit settlement',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'drop'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        initialCalls = count('/settle')
+      await submit(n, p, 503)
+      const a = await attempt(n)
+      for (const patch of [
+        { merchant_id: 'other-merchant' },
+        { resource_id: 'other-resource' },
+        { authorization_fingerprint: 'f'.repeat(64) },
+        { amount_atomic: '1001' },
+        { recipient: other.address },
+        { config_revision: a.config_revision + 1 },
+        { snapshot_hash: 'e'.repeat(64) },
+        { requirements_json: '{}' },
+      ]) {
+        const result = await control('mismatchedSettlement', {
+          id: n.id,
+          patch,
+        })
+        assert.equal(result.changed, false)
+        assert.equal((await attempt(n)).phase, 'settlement_unknown')
+        await noPayment(n)
+        pass(
+          'D1 settlement CAS rejects forged attempt snapshot ' +
+            Object.keys(patch)[0],
+        )
+      }
+      const hung = await fetch(runtime.origin + '/sg05/control', {
+        method: 'POST',
+        headers: {
+          Origin: runtime.origin,
+          'X-Local-Only': 'yes',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'reconcileHung', id: n.id }),
+      })
+      assert.equal(hung.status, 504)
+      await hung.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      assert.equal(count('/settle') - initialCalls, 1)
+      pass(
+        'reconciliation itself bounds a hung lookup without relying on caller timers or resubmitting settlement',
+      )
+    }
+    const reconcileRequest = (id) =>
+      fetch(`${runtime.origin}/sg05/control`, {
+        method: 'POST',
+        headers: {
+          Origin: runtime.origin,
+          'X-Local-Only': 'yes',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'reconcile', id }),
+      })
+    reset()
+    {
+      mode.settle = 'drop'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await submit(n, p, 503)
+      for (const bad of [
+        'identity',
+        'fingerprint',
+        'payer',
+        'recipient',
+        'asset',
+        'network',
+        'amount',
+        'contradictory',
+        'malformed',
+        'provenance',
+      ]) {
+        mode = { reconcile: bad }
+        const result = await reconcileRequest(n.id)
+        assert.equal(result.status, 503, bad)
+        await result.arrayBuffer()
+        assert.equal((await attempt(n)).phase, 'settlement_unknown')
+        await noPayment(n)
+        pass(
+          `reconciliation ${bad} cannot alter unknown state, create a receipt or release content`,
+        )
+      }
+      mode = { reconcile: 'wrong' }
+      assert.equal(
+        (await control('reconcile', { id: n.id })).outcome,
+        'settlement_unknown',
+      )
+      await noPayment(n)
+      pass(
+        'unknown reconciliation evidence preserves uncertainty without resubmission',
+      )
+      reset()
+      await control('fault', { mode: 'analytics' })
+      const failed = await reconcileRequest(n.id)
+      assert.equal(failed.status, 503)
+      await failed.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      await control('fault', { mode: 'off' })
+      pass(
+        'D1 analytics interruption rolls back reconciliation phase and receipt in the same batch',
+      )
+      const raced = await Promise.all([
+        reconcileRequest(n.id),
+        reconcileRequest(n.id),
+      ])
+      assert.deepEqual(raced.map((r) => r.status).sort(), [200, 409])
+      for (const result of raced) await result.arrayBuffer()
+      const records = await inspect()
+      assert.equal(
+        records.receipts.filter((r) => r.attempt_id === n.id).length,
+        1,
+      )
+      assert.equal(
+        records.analytics.filter((r) => r.attempt_id === n.id).length,
+        1,
+      )
+      assert.equal((await attempt(n)).phase, 'settled')
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'concurrent reconciliation commits exactly one receipt and analytics event using native D1 CAS',
+      )
+      const original = (await receipts(n))[0]
+      const conflicting = {
+        ...ledger.get(identity(p.payload.payload.authorization)).settlement,
+        transaction: '0x' + 'ab'.repeat(32),
+      }
+      assert.equal(
+        (
+          await control('duplicateSettlement', {
+            id: n.id,
+            result: conflicting,
+          })
+        ).changed,
+        false,
+      )
+      assert.deepEqual((await receipts(n))[0], original)
+      const duplicate = await reconcileRequest(n.id)
+      assert.equal(duplicate.status, 409)
+      await duplicate.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'settled')
+      await submit(n, p, 200)
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'late conflicting settlement and duplicate reconciliation cannot replace a persisted receipt or initiate another charge',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'drop'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await submit(n, p, 503)
+      let arrived
+      const observed = new Promise((resolve) => {
+        arrived = resolve
+      })
+      onReconcile = async () => {
+        arrived()
+        await delay(1500)
+      }
+      const pending = reconcileRequest(n.id)
+        .then((r) => r.arrayBuffer())
+        .catch(() => null)
+      await observed
+      const port = Number(new URL(runtime.origin).port)
+      await runtime.close('SIGKILL')
+      await pending
+      reset()
+      runtime = await localRuntime({
+        statePath: state,
+        includeApp: true,
+        fixture,
+        listenPort: port,
+      })
+      assert.deepEqual((await runtime.control('migrate')).applied, [])
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      assert.equal(
+        (await control('reconcile', { id: n.id })).outcome,
+        'settled',
+      )
+      await submit(n, p, 200)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'actual worker termination during reconciliation preserves unknown state; fresh runtime reload resolves once without resettlement',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'drop'
+      const n = await issue(await seed()),
+        p = await signed(n),
+        s = count('/settle')
+      await submit(n, p, 503)
+      await control('legacyEvidence', { id: n.id })
+      reset()
+      const rejected = await reconcileRequest(n.id)
+      assert.equal(rejected.status, 409)
+      await rejected.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      assert.equal((await attempt(n)).evidence_kind, 'legacy_unconfirmed')
+      await noPayment(n)
+      assert.equal((await control('localAdvance', { id: n.id })).changed, false)
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'local reconciliation cannot promote a legacy/untrusted attempt into settlement evidence',
+      )
+    }
+    reset()
+    {
+      const n = await issue(await seed())
+      await control('legacyEvidence', { id: n.id })
+      await control('expire', { id: n.id })
+      await control('recover')
+      assert.equal((await attempt(n)).phase, 'created')
+      assert.equal((await attempt(n)).evidence_kind, 'legacy_unconfirmed')
+      await noPayment(n)
+      pass(
+        'local recovery cannot rewrite expired attempts outside its evidence realm',
+      )
+    }
+  }
+  // Fixed internal configuration-document handler: no HTTP/DNS upstream transport.
+  const pilotSeed = async (owner = buyer.address) => {
+    const id = await seed(owner)
+    await control('pilotRegister', { id })
+    return id
+  }
+  const pilotCalls = async (id) =>
+    (await control('pilotInspect', { id })).pilot.calls
+  if (!process.argv.includes('--admission-only')) {
+    reset()
+    {
+      const id = await pilotSeed(),
+        before = {
+          v: count('/verify'),
+          s: count('/settle'),
+          u: count('/upstream'),
+        }
+      for (const probe of [
+        'unpaid',
+        'credentials',
+        'wrong-merchant',
+        'public',
+        'no-opt-in',
+      ])
+        assert.equal(
+          (await control('pilotProbe', { id, mode: probe })).blocked,
+          true,
+        )
+      const n = await issue(id),
+        p = await signed(n)
+      assert.equal(await pilotCalls(id), 0)
+      await noPayment(n)
+      productionProbeHeader = p.header
+      const delivered = await submit(n, p, 200)
+      assert.deepEqual(delivered.body.data, {
+        localSimulationOnly: true,
+        document: 'SignalArc Gate resource payment configuration',
+        resourceId: id,
+        network,
+        asset,
+        amountAtomic: '1000',
+        payTo: n.challenge.accepts[0].payTo,
+        registryVersion: '1',
+        configurationCommitment: delivered.body.data.configurationCommitment,
+      })
+      assert.match(
+        delivered.body.data.configurationCommitment,
+        /^0x[0-9a-f]{64}$/,
+      )
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal((await attempt(n)).phase, 'fulfilled')
+      assert.equal(await pilotCalls(id), 1)
+      assert.equal(count('/verify') - before.v, 1)
+      assert.equal(count('/settle') - before.s, 1)
+      assert.equal(count('/upstream') - before.u, 0)
+      await submit(n, p, 409)
+      assert.equal(await pilotCalls(id), 1)
+      assert.equal(
+        JSON.stringify(delivered.body.data).includes('upstreamUrl'),
+        false,
+      )
+      assert.equal(
+        JSON.stringify(delivered.body.data).includes('config_salt'),
+        false,
+      )
+      pass(
+        'internal JSON pilot completes durable x402 flow once, blocks unpaid/credential/wrong-merchant/public contexts and never performs upstream HTTP',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle'),
+        u = count('/upstream')
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          fetch(n.url, { headers: { 'PAYMENT-SIGNATURE': p.header } }),
+        ),
+      )
+      assert.equal(responses.filter((r) => r.status === 200).length, 1)
+      for (const r of responses) await r.arrayBuffer()
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal(await pilotCalls(id), 1)
+      assert.equal(count('/settle') - s, 1)
+      assert.equal(count('/upstream') - u, 0)
+      pass(
+        'six concurrent internal pilot requests produce one settlement claim, receipt and handler delivery',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      const original = { ...n, url: runtime.origin + '/sg05/pay/' + id }
+      await submit(original, p, 200)
+      await submit(original, p, 409)
+      assert.equal(await pilotCalls(id), 1)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'internal pilot supports standard original-URL x402 retry without weakening issued-ticket identity or idempotency',
+      )
+    }
+    for (const fault of ['throw', 'timeout', 'configuration-change']) {
+      reset()
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle'),
+        u = count('/upstream')
+      await control('pilotFault', { id, fault })
+      const result = await fetch(n.url, {
+        headers: { 'PAYMENT-SIGNATURE': p.header },
+      })
+      assert.notEqual(result.status, 200)
+      assert.equal(result.headers.get('PAYMENT-RESPONSE'), null)
+      await result.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      assert.equal((await attempt(n)).status, 'settled')
+      const receipt = await receipts(n)
+      assert.equal(receipt.length, 1)
+      await control('pilotFault', { id, fault: 'none' })
+      const retry = await fetch(n.url, {
+        headers: { 'PAYMENT-SIGNATURE': p.header },
+      })
+      assert.notEqual(retry.status, 200)
+      await retry.arrayBuffer()
+      assert.deepEqual(await receipts(n), receipt)
+      assert.equal(count('/settle') - s, 1)
+      assert.equal(count('/upstream') - u, 0)
+      pass(
+        'internal pilot ' +
+          fault +
+          ' preserves settled receipt and paid-but-unfulfilled state with no retry charge or network fetch',
+      )
+    }
+    reset()
+    {
+      mode.settle = 'drop'
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle'),
+        u = count('/upstream')
+      await submit(n, p, 503)
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      assert.equal(await pilotCalls(id), 0)
+      const revokedId = await pilotSeed()
+      await control('pilotRevoke', { id: revokedId })
+      const port = Number(new URL(runtime.origin).port)
+      await runtime.close()
+      runtime = await localRuntime({
+        statePath: state,
+        includeApp: true,
+        fixture,
+        listenPort: port,
+      })
+      assert.deepEqual((await runtime.control('migrate')).applied, [])
+      assert.equal(
+        (await control('pilotInspect', { id: revokedId })).pilot.revoked,
+        1,
+      )
+      assert.equal(
+        (await control('pilotReplayAdmission', { id: revokedId })).blocked,
+        true,
+      )
+      const revokedChallenge = await fetch(
+        runtime.origin + '/sg05/pay/' + revokedId,
+      )
+      assert.equal(revokedChallenge.status, 503)
+      assert.equal(revokedChallenge.headers.get('payment-required'), null)
+      await revokedChallenge.arrayBuffer()
+      await submit(n, p, 409)
+      await noPayment(n)
+      reset()
+      assert.equal(
+        (await control('reconcile', { id: n.id })).outcome,
+        'settled',
+      )
+      await submit(n, p, 200)
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal(await pilotCalls(id), 1)
+      assert.equal(count('/settle') - s, 1)
+      assert.equal(count('/upstream') - u, 0)
+      pass(
+        'internal pilot unknown settlement survives workerd restart; local evidence recovery delivers once without resettlement or upstream HTTP',
+      )
+    }
+    for (const patch of [
+      { owner: other.address },
+      { payout: other.address },
+      { priceAtomic: '1001' },
+      { localSimulationOnly: false },
+    ]) {
+      reset()
+      const id = await pilotSeed(),
+        s = count('/settle'),
+        v = count('/verify')
+      await control('registryPatch', { id, patch })
+      const response = await fetch(runtime.origin + '/sg05/pay/' + id)
+      assert.notEqual(response.status, 402)
+      assert.notEqual(response.status, 200)
+      await response.arrayBuffer()
+      assert.equal(await pilotCalls(id), 0)
+      assert.equal(count('/settle'), s)
+      assert.equal(count('/verify'), v)
+      pass(
+        'internal pilot rejects registry ' +
+          Object.keys(patch)[0] +
+          ' mismatch before a payable challenge',
+      )
+    }
+    for (const field of ['price_atomic', 'payout_address', 'enabled']) {
+      reset()
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      await control('mutate', {
+        id,
+        field,
+        value:
+          field === 'price_atomic'
+            ? '1001'
+            : field === 'payout_address'
+              ? other.address
+              : 0,
+      })
+      await submit(n, p, 409)
+      await noPayment(n)
+      assert.equal(await pilotCalls(id), 0)
+      assert.equal(count('/settle'), s)
+      pass(
+        'internal pilot captured manifest cannot authorize a challenge after resource ' +
+          field +
+          ' mutation',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        otherId = await pilotSeed(other.address),
+        s = count('/settle'),
+        v = count('/verify')
+      await control('pilotAttach', { id, sourceId: otherId })
+      const response = await fetch(runtime.origin + '/sg05/pay/' + id)
+      assert.notEqual(response.status, 402)
+      assert.notEqual(response.status, 200)
+      await response.arrayBuffer()
+      assert.equal(count('/settle'), s)
+      assert.equal(count('/verify'), v)
+      assert.equal(await pilotCalls(id), 0)
+      pass(
+        'internal pilot cannot attach another merchant/resource manifest even when upstream identifier, price and payout coincide',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      mode.settle = 'drop'
+      await submit(n, p, 503)
+      mode.settle = undefined
+      mode.chainEvidence = 'canonical'
+      const rejectedReview = await fetch(runtime.origin + '/sg05/control', {
+        method: 'POST',
+        headers: {
+          Origin: runtime.origin,
+          'X-Local-Only': 'yes',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'reconcile', id: n.id }),
+      })
+      assert.equal(rejectedReview.status, 503)
+      await rejectedReview.arrayBuffer()
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      assert.equal(count('/settle') - s, 1)
+      mode.chainEvidence = undefined
+      await control('reconcile', { id: n.id })
+      assert.equal((await receipts(n)).length, 1)
+      mode.chainEvidence = 'canonical'
+      await submit(n, p, 503)
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal(await pilotCalls(id), 0)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'recovery receipt alone cannot unlock internal content when canonical chain evidence conflicts; paid receipt survives without a second charge',
+      )
+    }
+    // Server-owned immutable admission and permanent revocation (local fixtures only).
+    reset()
+    {
+      const id = await pilotSeed()
+      for (const field of [
+        'handler',
+        'manifestVersion',
+        'chainId',
+        'asset',
+        'registryAddress',
+        'runtimeCodeHash',
+        'merchantId',
+        'resourceId',
+        'owner',
+        'originalOwner',
+        'onchainResourceId',
+        'configVersion',
+        'configHash',
+        'amountAtomic',
+        'recipient',
+        'snapshotHash',
+        'provenance',
+        'productionAdmitted',
+      ]) {
+        assert.equal(
+          (await control('pilotProbe', { id, mode: 'manifest:' + field }))
+            .blocked,
+          true,
+        )
+      }
+      pass(
+        'manifest exact-tuple validation rejects forged handler, merchant, registry pins, owners, configuration, amount/payee and evidence provenance',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        v = count('/verify'),
+        s = count('/settle')
+      const before = (await inspect()).resources.find(
+        (r) => r.id === id,
+      ).payment_revision
+      await control('pilotRevoke', { id })
+      assert.equal((await control('pilotInspect', { id })).pilot.revoked, 1)
+      assert.equal(
+        (await inspect()).resources.find((r) => r.id === id).payment_revision,
+        before + 1,
+      )
+      assert.equal(
+        (await control('pilotReplayAdmission', { id })).blocked,
+        true,
+      )
+      assert.equal((await control('pilotRecreate', { id })).blocked, true)
+      assert.equal((await control('pilotReplace', { id })).blocked, true)
+      await submit(n, p, 503)
+      const challenge = await fetch(runtime.origin + '/sg05/pay/' + id)
+      assert.equal(challenge.status, 503)
+      assert.equal(challenge.headers.get('payment-required'), null)
+      await challenge.arrayBuffer()
+      await noPayment(n)
+      assert.equal(count('/verify'), v)
+      assert.equal(count('/settle'), s)
+      assert.equal((await control('pilotInspect', { id })).pilot.revoked, 1)
+      pass(
+        'permanent revocation invalidates issued payment revision, prevents new 402/verification/settlement and survives replay/delete/reinsert attempts',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      onVerify = () => control('pilotRevoke', { id })
+      await submit(n, p, 503)
+      assert.equal(count('/settle'), s)
+      assert.equal((await attempt(n)).phase, 'failed')
+      await noPayment(n)
+      pass(
+        'revocation during verification aborts before settlement and leaves no receipt or analytics',
+      )
+    }
+    for (const boundary of ['settlement', 'fulfillment']) {
+      reset()
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      if (boundary === 'settlement')
+        onSettle = () => control('pilotRevoke', { id })
+      else await control('pilotFault', { id, fault: 'revoke' })
+      await submit(n, p, 503)
+      assert.equal((await receipts(n)).length, 1)
+      assert.equal((await attempt(n)).phase, 'fulfillment_failed')
+      assert.equal((await attempt(n)).status, 'settled')
+      await submit(n, p, 503)
+      assert.equal(count('/settle') - s, 1)
+      assert.equal((await control('pilotInspect', { id })).pilot.revoked, 1)
+      pass(
+        'revocation during ' +
+          boundary +
+          ' preserves validated simulated settlement/receipt, denies delivery and never charges again',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      mode.settle = 'drop'
+      await submit(n, p, 503)
+      await control('pilotRevoke', { id })
+      await submit(n, p, 503)
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      mode.settle = undefined
+      await control('reconcile', { id: n.id })
+      assert.equal((await attempt(n)).phase, 'settled')
+      assert.equal((await receipts(n)).length, 1)
+      await submit(n, p, 503)
+      assert.equal(count('/settle') - s, 1)
+      assert.equal(await pilotCalls(id), 0)
+      pass(
+        'unknown settlement evidence remains recoverable after revocation; local recovery preserves receipt but cannot restore delivery or resubmit',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n)
+      const before = (await inspect()).resources.find(
+        (r) => r.id === id,
+      ).payment_revision
+      assert.equal((await control('pilotFaultBatch', { id })).blocked, true)
+      assert.equal((await control('pilotInspect', { id })).pilot.revoked, 0)
+      assert.equal(
+        (await inspect()).resources.find((r) => r.id === id).payment_revision,
+        before,
+      )
+      await submit(n, p, 200)
+      pass(
+        'D1 batch failure rolls back partial revocation and revision; normal admitted pilot still works',
+      )
+    }
+    reset()
+    {
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      onVerify = async () => {
+        await Promise.all([
+          control('pilotRevoke', { id }),
+          control('pilotRevoke', { id }),
+        ])
+      }
+      const responses = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          fetch(n.url, { headers: { 'PAYMENT-SIGNATURE': p.header } }),
+        ),
+      )
+      for (const r of responses) {
+        assert.notEqual(r.status, 200)
+        assert.equal(r.headers.get('payment-response'), null)
+        await r.arrayBuffer()
+      }
+      assert.equal(count('/settle'), s)
+      assert.equal((await control('pilotInspect', { id })).pilot.revoked, 1)
+      await noPayment(n)
+      pass(
+        'concurrent buyers and repeated operator revocation cannot regain eligibility or race into settlement',
+      )
+    }
+    for (const evidence of [
+      'missing',
+      'provenance',
+      'chain',
+      'reverted',
+      'canonical',
+      'unfinalized',
+      'stale',
+      'token',
+      'payer',
+      'payee',
+      'amount',
+      'authorization',
+      'unused',
+      'removed',
+      'duplicate',
+    ]) {
+      reset()
+      const id = await pilotSeed(),
+        n = await issue(id),
+        p = await signed(n),
+        s = count('/settle')
+      mode.chainEvidence = evidence
+      await submit(n, p, 503)
+      assert.equal((await attempt(n)).phase, 'settlement_unknown')
+      await noPayment(n)
+      assert.equal(await pilotCalls(id), 0)
+      await submit(n, p, 409)
+      assert.equal(count('/settle') - s, 1)
+      pass(
+        'pilot rejects ' +
+          evidence +
+          ' chain evidence despite SDK success; unknown outcome persists without receipt/content/resubmission',
+      )
+    }
+  }
+  {
+    const probe = await control('authBoundary')
+    assert.equal(probe.jwtFactory, 'function')
+    assert.equal(probe.httpClient, 'function')
+    assert.equal(probe.credentialsUsed, false)
     pass(
-      'late conflicting settlement and duplicate reconciliation cannot replace a persisted receipt or initiate another charge',
+      'official CDP public auth and Foundation HTTP client entry points load in native workerd without credentials or signing',
     )
   }
-  reset()
   {
-    mode.settle = 'drop'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await submit(n, p, 503)
-    let arrived
-    const observed = new Promise((resolve) => {
-      arrived = resolve
-    })
-    onReconcile = async () => {
-      arrived()
-      await delay(1500)
+    for (const mode of ['public', 'production', 'no-opt-in']) {
+      const probe = await control('admissionProfile', { mode })
+      assert.equal(probe.blocked, true)
+      assert.equal(probe.calls, 0)
     }
-    const pending = reconcileRequest(n.id)
-      .then((r) => r.arrayBuffer())
-      .catch(() => null)
-    await observed
-    const port = Number(new URL(runtime.origin).port)
-    await runtime.close('SIGKILL')
-    await pending
+    pass(
+      'admission factory rejects production realm, public origin and missing opt-in before any RPC observation',
+    )
+  }
+  // Durable admission review: only sealed same-instance candidates, never production proof.
+  const unknownPilot = async () => {
     reset()
+    const id = await pilotSeed(),
+      n = await issue(id),
+      p = await signed(n)
+    productionProbeHeader = p.header
+    mode.settle = 'drop'
+    await submit(n, p, 503)
+    mode.settle = undefined
+    return { id, n, p }
+  }
+  for (const mode of [
+    'ok',
+    'clone',
+    'foreign-instance',
+    'wrong-owner',
+    'replay',
+    'race',
+    'conflict',
+    'replace-conflict',
+    'late-conflict',
+    'expired',
+  ]) {
+    const { id, n, p } = await unknownPilot(),
+      s = count('/settle')
+    const reviewed = await control('admissionReview', { id: n.id, mode })
+    assert.equal(reviewed.blocked, mode !== 'ok')
+    if (mode === 'replace-conflict')
+      assert.equal(reviewed.replacementBlocked, true)
+    assert.equal(reviewed.candidate.productionAdmitted, false)
+    assert.equal(reviewed.candidate.localSimulationOnly, true)
+    assert.equal(
+      reviewed.observations.length,
+      ['conflict', 'replace-conflict', 'late-conflict'].includes(mode) ? 2 : 1,
+    )
+    assert.equal(
+      (await attempt(n)).phase,
+      mode === 'race' ? 'failed' : 'settlement_unknown',
+    )
+    await noPayment(n)
+    if (['conflict', 'replace-conflict', 'late-conflict'].includes(mode)) {
+      const r = await fetch(runtime.origin + '/sg05/control', {
+        method: 'POST',
+        headers: {
+          Origin: runtime.origin,
+          'X-Local-Only': 'yes',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'reconcile', id: n.id }),
+      })
+      assert.equal(r.status, 503)
+      await r.arrayBuffer()
+      await noPayment(n)
+      await submit(n, p, 409)
+    }
+    assert.equal(count('/settle'), s)
+    assert.equal(await pilotCalls(id), 0)
+    pass(
+      'durable settlement admission ' +
+        mode +
+        ' enforces sealed identity, D1 journal/quarantine and no receipt/content/settlement authority',
+    )
+  }
+  for (const invalid of ['nonce', 'merchant']) {
+    const { n } = await unknownPilot(),
+      s = count('/settle')
+    const r = await fetch(runtime.origin + '/sg05/control', {
+      method: 'POST',
+      headers: {
+        Origin: runtime.origin,
+        'X-Local-Only': 'yes',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'admissionReview',
+        id: n.id,
+        ...(invalid === 'nonce'
+          ? { nonce: '0x' + 'ab'.repeat(32) }
+          : { merchant: '00000000-0000-4000-8000-000000000000' }),
+      }),
+    })
+    assert.equal(r.status, 503)
+    await r.arrayBuffer()
+    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    await noPayment(n)
+    assert.equal(count('/settle'), s)
+    pass(
+      'admission rejects wrong ' +
+        invalid +
+        ' before preparing evidence or creating receipts',
+    )
+  }
+  {
+    const { id, n } = await unknownPilot(),
+      s = count('/settle')
+    const review = await control('admissionReview', { id: n.id, mode: 'ok' })
+    const port = Number(new URL(runtime.origin).port)
+    await runtime.close()
     runtime = await localRuntime({
       statePath: state,
       includeApp: true,
@@ -1552,33 +2362,97 @@ try {
       listenPort: port,
     })
     assert.deepEqual((await runtime.control('migrate')).applied, [])
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
+    const clone = await control('admissionReview', {
+      id: n.id,
+      mode: 'serialized',
+      candidate: review.candidate,
+    })
+    assert.equal(clone.blocked, true)
+    assert.equal(clone.observations.length, 1)
     await noPayment(n)
+    await control('pilotRevoke', { id })
     assert.equal((await control('reconcile', { id: n.id })).outcome, 'settled')
-    await submit(n, p, 200)
-    assert.equal(count('/settle') - s, 1)
+    assert.equal((await receipts(n)).length, 1)
+    assert.equal(count('/settle'), s)
     pass(
-      'actual worker termination during reconciliation preserves unknown state; fresh runtime reload resolves once without resettlement',
+      'worker restart preserves review journal; serialized candidate cannot replay; fresh proof recovers revoked payment truth without resettlement',
     )
   }
+  {
+    const { n } = await unknownPilot(),
+      s = count('/settle')
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        fetch(runtime.origin + '/sg05/control', {
+          method: 'POST',
+          headers: {
+            Origin: runtime.origin,
+            'X-Local-Only': 'yes',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ action: 'reconcile', id: n.id }),
+        }),
+      ),
+    )
+    assert.equal(responses.filter((r) => r.status === 200).length, 1)
+    for (const r of responses) await r.arrayBuffer()
+    assert.equal((await receipts(n)).length, 1)
+    assert.equal((await attempt(n)).phase, 'settled')
+    assert.equal(count('/settle'), s)
+    pass(
+      'concurrent pilot admission/reconciliation persists one receipt through durable D1 CAS, without any second settlement call',
+    )
+  }
+  // Builder attribution is optional envelope metadata, never a signed authorization rewrite.
   reset()
   {
-    mode.settle = 'drop'
-    const n = await issue(await seed()),
-      p = await signed(n),
-      s = count('/settle')
-    await submit(n, p, 503)
-    await control('legacyEvidence', { id: n.id })
-    reset()
-    const rejected = await reconcileRequest(n.id)
-    assert.equal(rejected.status, 409)
-    await rejected.arrayBuffer()
-    assert.equal((await attempt(n)).phase, 'settlement_unknown')
-    assert.equal((await attempt(n)).evidence_kind, 'legacy_unconfirmed')
-    await noPayment(n)
+    const id = await pilotSeed(),
+      n = await issue(id)
+    assert.equal(n.challenge.extensions['builder-code'].info.a, 'bc_ipzfx50y')
+    const repeated = await fetch(n.url)
+    assert.equal(repeated.status, 402)
+    assert.deepEqual((await repeated.json()).extensions, n.challenge.extensions)
+    const p = await signed(n, (payload) => {
+      payload.extensions = structuredClone(n.challenge.extensions)
+      payload.extensions['builder-code'].info.s = ['cdp_sdk_client']
+    })
+    const original = structuredClone(p.payload.payload)
+    const s = count('/settle')
+    await submit(n, p, 200)
+    const tx = chainFixtures.get(identity(p.payload.payload.authorization)).tx
+    assert.deepEqual(parseBuilderCodeSuffixFromCalldata(tx.input), {
+      a: 'bc_ipzfx50y',
+      s: ['cdp_sdk_client'],
+    })
+    assert.deepEqual(p.payload.payload, original)
+    assert.equal((await receipts(n)).length, 1)
     assert.equal(count('/settle') - s, 1)
     pass(
-      'local reconciliation cannot promote a legacy/untrusted attempt into settlement evidence',
+      'Builder Code app declaration survives issued-ticket 402 retries and exact client echo without rewriting the signed authorization or creating extra settlement',
+    )
+  }
+  for (const invalid of ['changed-app', 'extra-extension', 'forged-wallet']) {
+    reset()
+    const id = await pilotSeed(),
+      n = await issue(id),
+      s = count('/settle'),
+      v = count('/verify')
+    const p = await signed(n, (payload) => {
+      payload.extensions = structuredClone(n.challenge.extensions)
+      if (invalid === 'changed-app')
+        payload.extensions['builder-code'].info.a = 'other_app'
+      else if (invalid === 'forged-wallet')
+        payload.extensions['builder-code'].info.w = 'forged'
+      else payload.extensions.unknown = { info: {} }
+    })
+    await submit(n, p, 402)
+    assert.equal(count('/settle'), s)
+    assert.equal(count('/verify'), v)
+    await noPayment(n)
+    pass(
+      'Builder Code ' +
+        invalid +
+        ' is rejected before verification/settlement; attribution cannot loosen payment identity or extension policy',
     )
   }
   ordinary = await localRuntime({ includeApp: true })
@@ -1596,12 +2470,17 @@ try {
     '/sg05/control',
     '/api/pay/10000000-0000-4000-8000-000000000001',
     '/api/gateway',
+    '/api/internal-json',
+    '/api/settlement-admission',
+    '/api/admission-review',
+    '/api/cdp-auth-boundary',
+    '/api/pilot',
   ]) {
     const response = await fetch(ordinary.origin + path, {
       method: 'POST',
       headers: {
         SG05_LOCAL_ONLY: 'yes',
-        'PAYMENT-SIGNATURE': good.header,
+        'PAYMENT-SIGNATURE': productionProbeHeader,
         'X-Local-Only': 'yes',
         'Content-Type': 'application/json',
       },
@@ -1636,6 +2515,7 @@ try {
     inputs.some(
       (p) =>
         p.includes('server/sg05') ||
+        p.includes('server/sg07/internal-json') ||
         p.includes('tests/') ||
         p.includes('@x402') ||
         p.includes('@coinbase'),
@@ -1678,7 +2558,7 @@ try {
     `${passed} SG-05 checks passed in native Pages/workerd + real local D1. LOCAL SIMULATION ONLY; duplicate settlement initiations: ${duplicatedSettles}.`,
   )
   console.log(
-    `Local mock HTTP counts: ${JSON.stringify(Object.fromEntries(['/supported', '/verify', '/settle', '/reconcile', '/upstream', '/clock'].map((p) => [p, count(p)])))}`,
+    `Local mock HTTP counts: ${JSON.stringify(Object.fromEntries(['/supported', '/verify', '/settle', '/reconcile', '/upstream', '/chain', '/clock'].map((p) => [p, count(p)])))}`,
   )
 } finally {
   await ordinary?.close()

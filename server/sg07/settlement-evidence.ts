@@ -351,6 +351,7 @@ export function createSettlementObserver(
           finalizedBlockHash: finalized.hash,
           finalizedBlockNumber: finalized.number.toString(),
           authorizationKey: identity,
+          authorizationNonce: nonce,
           authorizationFingerprint: fingerprint,
           network: NETWORK,
           asset: USDC,

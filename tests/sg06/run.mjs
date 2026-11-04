@@ -129,6 +129,7 @@ try {
     '0005_sg07_persistent_quarantine.sql',
     '0006_sg07_api_budget.sql',
     '0007_sg07_settlement_observations.sql',
+    '0008_sg07_settlement_journal_integrity.sql',
   ])
   assert.deepEqual((await runtime.control('migrate')).applied, [])
   for (const [name, digest] of historical)

@@ -1,3 +1,17 @@
+import { generateJwt } from '@coinbase/cdp-sdk/auth'
+import { HTTPFacilitatorClient } from '@x402/core/server'
+import {
+  localPilotManifest,
+  type LocalPilotAuthority,
+} from '../../server/sg07/internal-manifest'
+import {
+  localChainVerifier,
+  localReconciliationAdmission,
+  localChainRead,
+  localEvidencePolicy,
+} from './chain-verifier'
+import { createSettlementAdmissionReview } from '../../server/sg07/settlement-admission'
+import { createLocalInternalJsonPilot } from '../../server/sg07/internal-json'
 import { createLocalUpstreamAccess } from '../../server/sg07/upstream'
 import { createLocalGateway } from '../../server/sg05/gateway'
 import {
@@ -9,7 +23,9 @@ import {
 } from '../../server/sg05/bounds'
 import {
   commitment,
+  snapshot,
   resourceId,
+  type Snapshot,
   type RegistryState,
 } from '../../server/sg05/registry'
 import { PaymentStore } from '../../server/sg05/store'
@@ -17,7 +33,10 @@ import {
   reconcileUnknown,
   type LocalEvidence,
 } from '../../server/sg05/reconcile'
-import { cdpCredentialGuard } from '../../server/sg05/protocol'
+import {
+  issuedResourceUrl,
+  cdpCredentialGuard,
+} from '../../server/sg05/protocol'
 import { walletAddress } from '../../shared/resources'
 import { readJson } from '../../server/sg03/http'
 type Env = {
@@ -55,6 +74,7 @@ function installEgress(origin: string) {
         '/reconcile',
         '/upstream',
         '/clock',
+        '/chain',
       ].includes(target.pathname)
     ) {
       blocked++
@@ -235,6 +255,202 @@ async function control(request: Request, env: Env) {
       .run()
     return reply(200, { id, onchain, localSimulationOnly: true })
   }
+  if (
+    body.action === 'pilotReplace' ||
+    body.action === 'pilotRecreate' ||
+    body.action === 'pilotFaultBatch' ||
+    body.action === 'pilotRevoke' ||
+    body.action === 'pilotReplayAdmission' ||
+    body.action === 'pilotRegister' ||
+    body.action === 'pilotInspect' ||
+    body.action === 'pilotFault' ||
+    body.action === 'pilotAttach' ||
+    body.action === 'pilotProbe'
+  ) {
+    await db
+      .prepare(
+        "CREATE TABLE IF NOT EXISTS sg07_internal_pilot_fixture (id TEXT PRIMARY KEY,manifest TEXT NOT NULL,admission TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),fault TEXT NOT NULL DEFAULT 'none',calls INTEGER NOT NULL DEFAULT 0)",
+      )
+      .run()
+    // Test-only operator ledger. Revocation is permanent; no re-enable/update/delete path.
+    for (const sql of [
+      "CREATE TRIGGER IF NOT EXISTS pilot_no_replace BEFORE INSERT ON sg07_internal_pilot_fixture WHEN EXISTS(SELECT 1 FROM sg07_internal_pilot_fixture WHERE id=NEW.id) BEGIN SELECT RAISE(ABORT,'pilot admission already exists'); END",
+      "CREATE TRIGGER IF NOT EXISTS pilot_no_delete BEFORE DELETE ON sg07_internal_pilot_fixture BEGIN SELECT RAISE(ABORT,'pilot admission is permanent'); END",
+      "CREATE TRIGGER IF NOT EXISTS pilot_immutable BEFORE UPDATE OF id,admission ON sg07_internal_pilot_fixture BEGIN SELECT RAISE(ABORT,'immutable admission'); END",
+      "CREATE TRIGGER IF NOT EXISTS pilot_sticky BEFORE UPDATE OF revoked ON sg07_internal_pilot_fixture WHEN OLD.revoked=1 AND NEW.revoked<>1 BEGIN SELECT RAISE(ABORT,'revocation is permanent'); END",
+      'CREATE TRIGGER IF NOT EXISTS pilot_revoke_revision AFTER UPDATE OF revoked ON sg07_internal_pilot_fixture WHEN OLD.revoked<>NEW.revoked BEGIN UPDATE api_resources SET payment_revision=payment_revision+1 WHERE id=NEW.id; END',
+    ])
+      await db.prepare(sql).run()
+    if (body.action === 'pilotRevoke')
+      await db
+        .prepare('UPDATE sg07_internal_pilot_fixture SET revoked=1 WHERE id=?')
+        .bind(body.id)
+        .run()
+    if (body.action === 'pilotReplayAdmission') {
+      let blocked = false
+      try {
+        await db
+          .prepare(
+            'UPDATE sg07_internal_pilot_fixture SET revoked=0 WHERE id=?',
+          )
+          .bind(body.id)
+          .run()
+      } catch {
+        blocked = true
+      }
+      return reply(200, { blocked })
+    }
+    if (body.action === 'pilotRecreate' || body.action === 'pilotFaultBatch') {
+      let blocked = false
+      try {
+        await db.batch(
+          body.action === 'pilotRecreate'
+            ? [
+                db
+                  .prepare('DELETE FROM sg07_internal_pilot_fixture WHERE id=?')
+                  .bind(body.id),
+                db
+                  .prepare(
+                    'INSERT INTO sg07_internal_pilot_fixture (id,manifest,admission) VALUES (?,?,?)',
+                  )
+                  .bind(body.id, '{}', '{}'),
+              ]
+            : [
+                db
+                  .prepare(
+                    'UPDATE sg07_internal_pilot_fixture SET revoked=1 WHERE id=?',
+                  )
+                  .bind(body.id),
+                db
+                  .prepare(
+                    'UPDATE sg07_internal_pilot_fixture SET admission=? WHERE id=?',
+                  )
+                  .bind('{}', body.id),
+              ],
+        )
+      } catch {
+        blocked = true
+      }
+      return reply(200, { blocked })
+    }
+    if (body.action === 'pilotReplace') {
+      let blocked = false
+      try {
+        await db
+          .prepare(
+            'INSERT OR REPLACE INTO sg07_internal_pilot_fixture (id,manifest,admission) VALUES (?,?,?)',
+          )
+          .bind(body.id, '{}', '{}')
+          .run()
+      } catch {
+        blocked = true
+      }
+      return reply(200, { blocked })
+    }
+    if (body.action === 'pilotRegister') {
+      const captured = await snapshot(
+        db,
+        String(body.id),
+        async (id) => {
+          const row = await db
+            .prepare('SELECT state FROM sg05_registry_fixture WHERE id=?')
+            .bind(id)
+            .first<{ state: string }>()
+          if (!row) throw new GatewayError(503, 'fixture_registry_missing')
+          return boundedJson(row.state) as RegistryState
+        },
+        () => trustedClock(env),
+      )
+      await db
+        .prepare(
+          'INSERT INTO sg07_internal_pilot_fixture (id,manifest,admission) VALUES (?,?,?)',
+        )
+        .bind(
+          body.id,
+          JSON.stringify(captured),
+          JSON.stringify(localPilotManifest(captured)),
+        )
+        .run()
+    }
+    if (body.action === 'pilotFault')
+      await db
+        .prepare('UPDATE sg07_internal_pilot_fixture SET fault=? WHERE id=?')
+        .bind(body.fault, body.id)
+        .run()
+    if (body.action === 'pilotAttach')
+      await db
+        .prepare(
+          'UPDATE sg07_internal_pilot_fixture SET manifest=(SELECT manifest FROM sg07_internal_pilot_fixture WHERE id=?) WHERE id=?',
+        )
+        .bind(body.sourceId, body.id)
+        .run()
+    if (body.action === 'pilotProbe') {
+      const row = await db
+        .prepare('SELECT manifest FROM sg07_internal_pilot_fixture WHERE id=?')
+        .bind(body.id)
+        .first<{ manifest: string }>()
+      const entry = JSON.parse(row!.manifest) as Snapshot
+      let blocked = false
+      try {
+        const authority = pilotAuthority(db, String(body.id), env)
+        const read = authority.read
+        if (String(body.mode).startsWith('manifest:'))
+          authority.read = async () => {
+            const row = (await read())!
+            return {
+              ...row,
+              manifest: {
+                ...(row.manifest as object),
+                [String(body.mode).slice(9)]: 'FORGED',
+              },
+            }
+          }
+        const access = await createLocalInternalJsonPilot(
+          db,
+          {
+            origin:
+              body.mode === 'public'
+                ? 'https://gate.signalarc.fun'
+                : env.APP_ORIGIN,
+            appEnv: 'local',
+            optIn: body.mode !== 'no-opt-in',
+            pagesUrl: env.CF_PAGES_URL!,
+          },
+          entry,
+          null,
+          authority,
+        )
+        if (body.mode === 'wrong-merchant')
+          await access.assertEligible({
+            ...entry,
+            merchantId: 'wrong-merchant',
+          })
+        else
+          await access.request(entry.resource.upstreamUrl, {
+            method: 'GET',
+            redirect: 'manual',
+            cache: 'no-store',
+            headers: {
+              Accept: 'application/json',
+              ...(body.mode === 'credentials'
+                ? { Authorization: 'LOCAL_BUYER_SECRET' }
+                : {}),
+            },
+            signal: new AbortController().signal,
+          })
+      } catch {
+        blocked = true
+      }
+      return reply(200, { blocked })
+    }
+    const row = await db
+      .prepare(
+        'SELECT calls,fault,revoked,admission FROM sg07_internal_pilot_fixture WHERE id=?',
+      )
+      .bind(body.id)
+      .first()
+    return reply(200, { pilot: row, localSimulationOnly: true })
+  }
   if (body.action === 'inspect') {
     const attempts = (
       await db
@@ -413,6 +629,44 @@ async function control(request: Request, env: Env) {
     return reply(200, { fault: body.mode })
   }
   const store = new PaymentStore(db, () => trustedClock(env))
+  if (body.action === 'reconcileHung')
+    return reply(200, {
+      outcome: await reconcileUnknown(
+        store,
+        String(body.id),
+        () => new Promise(() => {}),
+      ),
+    })
+  if (body.action === 'localAdvance')
+    return reply(200, {
+      changed: await store.advance(
+        String(body.id),
+        'settlement_unknown',
+        'failed',
+      ),
+    })
+  if (body.action === 'mismatchedSettlement') {
+    const attempt = await store.get(String(body.id))
+    if (!attempt) throw new GatewayError(404, 'attempt_missing')
+    const forged = {
+      ...attempt,
+      ...(body.patch as Record<string, unknown>),
+    } as import('../../server/sg05/store').Attempt
+    return reply(200, {
+      changed: await store.settle(
+        forged,
+        {
+          success: true,
+          transaction: '0x' + '55'.repeat(32),
+          network: 'eip155:8453',
+          payer: forged.buyer_address!,
+          amount: forged.amount_atomic,
+          extra: { asset: forged.asset, recipient: forged.recipient },
+        },
+        'settlement_unknown',
+      ),
+    })
+  }
   if (body.action === 'duplicateSettlement') {
     const attempt = await store.get(String(body.id))
     if (!attempt) throw new GatewayError(404, 'attempt_missing')
@@ -423,17 +677,215 @@ async function control(request: Request, env: Env) {
   }
   if (body.action === 'recover')
     return reply(200, { recovered: await store.recover() })
+  if (body.action === 'authBoundary')
+    return reply(200, {
+      jwtFactory: typeof generateJwt,
+      httpClient: typeof HTTPFacilitatorClient,
+      credentialsUsed: false,
+    })
+  if (body.action === 'admissionProfile') {
+    let blocked = false,
+      calls = 0
+    try {
+      createSettlementAdmissionReview(
+        db,
+        {
+          origin:
+            body.mode === 'public'
+              ? 'https://gate.signalarc.fun'
+              : env.APP_ORIGIN,
+          optIn: body.mode !== 'no-opt-in',
+          realm: (body.mode === 'production'
+            ? 'production'
+            : 'local_simulation') as 'local_simulation',
+        },
+        localEvidencePolicy,
+        async () => {
+          calls++
+          throw Error('No RPC permitted')
+        },
+        () => trustedClock(env),
+      )
+    } catch {
+      blocked = true
+    }
+    return reply(200, { blocked, calls })
+  }
+  if (body.action === 'admissionReview') {
+    const a = await store.get(String(body.id))
+    if (!a) throw new GatewayError(404, 'missing_fixture_attempt')
+    const lookup = await fetch(env.MOCK_ORIGIN + '/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identity: a.authorization_key }),
+    })
+    const evidence = (await boundedResponse(lookup, 8192)) as LocalEvidence
+    if (!evidence.settlement)
+      throw new GatewayError(503, 'fixture_settlement_unknown')
+    const { rpc, nonce } = await localChainRead(
+      env.MOCK_ORIGIN,
+      a,
+      evidence.settlement,
+      new AbortController().signal,
+    )
+    let admissionOffset = 0
+    const review = createSettlementAdmissionReview(
+      db,
+      { origin: env.APP_ORIGIN, optIn: true, realm: 'local_simulation' },
+      localEvidencePolicy,
+      rpc,
+      async () => (await trustedClock(env)) + admissionOffset,
+    )
+    const candidate = await review.prepare(
+      body.merchant ? String(body.merchant) : a.merchant_id,
+      a.id,
+      evidence.settlement.transaction,
+      body.nonce ? String(body.nonce) : nonce,
+    )
+    if (body.mode === 'race')
+      await db
+        .prepare("UPDATE payment_attempts SET phase='failed' WHERE id=?")
+        .bind(a.id)
+        .run()
+    const quarantine = async () => {
+      const row = await db
+        .prepare('SELECT * FROM settlement_evidence_observations WHERE id=?')
+        .bind(candidate.reviewId)
+        .first<Record<string, unknown>>()
+      await db
+        .prepare(
+          `INSERT INTO settlement_evidence_observations (id,attempt_id,merchant_id,resource_id,authorization_key,authorization_fingerprint,network,asset,payer_address,recipient_address,amount_atomic,transaction_hash,provenance,source_id,observed_at,outcome,evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          row!.attempt_id,
+          row!.merchant_id,
+          row!.resource_id,
+          row!.authorization_key,
+          row!.authorization_fingerprint,
+          row!.network,
+          row!.asset,
+          row!.payer_address,
+          row!.recipient_address,
+          row!.amount_atomic,
+          row!.transaction_hash,
+          row!.provenance,
+          row!.source_id,
+          row!.observed_at,
+          'conflict',
+          row!.evidence_json,
+        )
+        .run()
+    }
+    let replacementBlocked = false
+    if (body.mode === 'conflict' || body.mode === 'replace-conflict')
+      await quarantine()
+    if (body.mode === 'replace-conflict') {
+      try {
+        await db
+          .prepare(
+            `INSERT OR REPLACE INTO settlement_evidence_observations SELECT id,attempt_id,merchant_id,resource_id,authorization_key,authorization_fingerprint,network,asset,payer_address,recipient_address,amount_atomic,transaction_hash,provenance,source_id,observed_at,'rpc_observation_only',evidence_json FROM settlement_evidence_observations WHERE attempt_id=? AND outcome='conflict'`,
+          )
+          .bind(a.id)
+          .run()
+      } catch {
+        replacementBlocked = true
+      }
+    }
+    if (body.mode === 'expired') admissionOffset = 10001
+    let blocked = false
+    try {
+      if (body.mode === 'serialized')
+        await review.consume(body.candidate as object, a.merchant_id, a.id)
+      else if (body.mode === 'clone')
+        await review.consume(
+          JSON.parse(JSON.stringify(candidate)),
+          a.merchant_id,
+          a.id,
+        )
+      else if (body.mode === 'foreign-instance')
+        await createSettlementAdmissionReview(
+          db,
+          { origin: env.APP_ORIGIN, optIn: true, realm: 'local_simulation' },
+          localEvidencePolicy,
+          rpc,
+          () => trustedClock(env),
+        ).consume(candidate, a.merchant_id, a.id)
+      else if (body.mode === 'wrong-owner')
+        await review.consume(
+          candidate,
+          '00000000-0000-4000-8000-000000000000',
+          a.id,
+        )
+      else {
+        await review.consume(candidate, a.merchant_id, a.id)
+        if (body.mode === 'late-conflict') {
+          await quarantine()
+          blocked = !(await store.settle(
+            a,
+            evidence.settlement,
+            'settlement_unknown',
+          ))
+        }
+        if (body.mode === 'replay')
+          await review.consume(candidate, a.merchant_id, a.id)
+      }
+    } catch {
+      blocked = true
+    }
+    return reply(200, {
+      candidate,
+      blocked,
+      replacementBlocked,
+      observations: (
+        await db
+          .prepare(
+            'SELECT id,outcome FROM settlement_evidence_observations WHERE attempt_id=?',
+          )
+          .bind(a.id)
+          .all()
+      ).results,
+    })
+  }
   if (body.action === 'reconcile') {
-    const outcome = await reconcileUnknown(store, String(body.id), (identity) =>
-      deadline(async (signal) => {
-        const response = await fetch(`${env.MOCK_ORIGIN}/reconcile`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identity }),
-          signal,
-        })
-        return boundedResponse(response, 8192, signal) as Promise<LocalEvidence>
-      }),
+    const pilotTable = await db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='sg07_internal_pilot_fixture'",
+      )
+      .first()
+    const pilot =
+      pilotTable &&
+      (await db
+        .prepare(
+          'SELECT p.id FROM sg07_internal_pilot_fixture p JOIN payment_attempts a ON a.resource_id=p.id WHERE a.id=?',
+        )
+        .bind(body.id)
+        .first())
+    const outcome = await reconcileUnknown(
+      store,
+      String(body.id),
+      (identity) =>
+        deadline(async (signal) => {
+          const response = await fetch(`${env.MOCK_ORIGIN}/reconcile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identity }),
+            signal,
+          })
+          return boundedResponse(
+            response,
+            8192,
+            signal,
+          ) as Promise<LocalEvidence>
+        }),
+      pilot
+        ? localReconciliationAdmission(
+            db,
+            env.APP_ORIGIN,
+            env.MOCK_ORIGIN,
+            () => trustedClock(env),
+          )
+        : undefined,
     )
     return reply(200, { outcome })
   }
@@ -525,6 +977,74 @@ export async function onRequest({
         host: host.status,
       })
     }
+    const pilotTable = await env.SIGNALARC_DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='sg07_internal_pilot_fixture'",
+    ).first()
+    const resource = new URL(request.url).pathname.match(
+      /^\/sg05\/pay\/([a-f0-9-]{36})$/,
+    )?.[1]
+    const pilot =
+      pilotTable && resource
+        ? await env.SIGNALARC_DB.prepare(
+            'SELECT manifest,fault FROM sg07_internal_pilot_fixture WHERE id=?',
+          )
+            .bind(resource)
+            .first<{ manifest: string; fault: string }>()
+        : null
+    let internal:
+      import('../../server/sg05/upstream').UpstreamAccess | undefined
+    if (pilot) {
+      let paymentAttempt = new URL(request.url).searchParams.get('attempt')
+      if (!paymentAttempt && request.headers.get('PAYMENT-SIGNATURE')) {
+        const issued = new URL(
+          issuedResourceUrl(request.headers.get('PAYMENT-SIGNATURE')!),
+        )
+        if (
+          issued.origin === env.APP_ORIGIN &&
+          issued.pathname === new URL(request.url).pathname
+        )
+          paymentAttempt = issued.searchParams.get('attempt')
+      }
+      const access = await createLocalInternalJsonPilot(
+        env.SIGNALARC_DB,
+        {
+          origin: env.APP_ORIGIN,
+          appEnv: env.APP_ENV,
+          optIn: env.SG05_LOCAL_ONLY === 'yes',
+          pagesUrl: env.CF_PAGES_URL!,
+        },
+        JSON.parse(pilot.manifest),
+        paymentAttempt,
+        pilotAuthority(env.SIGNALARC_DB, resource!, env),
+      )
+      internal = {
+        assertEligible: access.assertEligible,
+        validateLocalSettlement: access.validateLocalSettlement,
+        request: async (url, init) => {
+          await env.SIGNALARC_DB.prepare(
+            'UPDATE sg07_internal_pilot_fixture SET calls=calls+1 WHERE id=?',
+          )
+            .bind(resource!)
+            .run()
+          if (pilot.fault === 'throw')
+            throw new GatewayError(502, 'local_internal_delivery_failure')
+          if (pilot.fault === 'timeout') return new Promise(() => {})
+          if (pilot.fault === 'revoke')
+            await env.SIGNALARC_DB.prepare(
+              'UPDATE sg07_internal_pilot_fixture SET revoked=1 WHERE id=?',
+            )
+              .bind(resource!)
+              .run()
+          if (pilot.fault === 'configuration-change')
+            await env.SIGNALARC_DB.prepare(
+              'UPDATE api_resources SET enabled=0 WHERE id=?',
+            )
+              .bind(resource!)
+              .run()
+          return access.request(url, init)
+        },
+      }
+    }
     const gateway = createLocalGateway({
       db: env.SIGNALARC_DB,
       origin: env.APP_ORIGIN,
@@ -539,16 +1059,18 @@ export async function onRequest({
         if (!row) throw new GatewayError(503, 'registry_unavailable')
         return boundedJson(row.state) as RegistryState
       },
-      upstream: createLocalUpstreamAccess(
-        async (resource, merchant) => {
-          return env.SIGNALARC_DB.prepare(
-            'SELECT * FROM sg05_upstream_policy WHERE resourceId=? AND merchantId=?',
-          )
-            .bind(resource, merchant)
-            .first()
-        },
-        (_url, init) => fetch(`${env.MOCK_ORIGIN}/upstream`, init),
-      ),
+      upstream:
+        internal ??
+        createLocalUpstreamAccess(
+          async (resource, merchant) => {
+            return env.SIGNALARC_DB.prepare(
+              'SELECT * FROM sg05_upstream_policy WHERE resourceId=? AND merchantId=?',
+            )
+              .bind(resource, merchant)
+              .first()
+          },
+          (_url, init) => fetch(`${env.MOCK_ORIGIN}/upstream`, init),
+        ),
     })
     return await gateway(request)
   } catch (error) {
@@ -556,5 +1078,28 @@ export async function onRequest({
       error: error instanceof GatewayError ? error.code : 'fixture_unavailable',
       localSimulationOnly: true,
     })
+  }
+}
+
+function pilotAuthority(
+  db: D1Database,
+  id: string,
+  env: Env,
+): LocalPilotAuthority {
+  return {
+    async read() {
+      const row = await db
+        .prepare(
+          'SELECT admission,revoked FROM sg07_internal_pilot_fixture WHERE id=?',
+        )
+        .bind(id)
+        .first<{ admission: string; revoked: number }>()
+      return row
+        ? { manifest: boundedJson(row.admission), revoked: row.revoked }
+        : null
+    },
+    verifySettlement: localChainVerifier(env.MOCK_ORIGIN, () =>
+      trustedClock(env),
+    ),
   }
 }

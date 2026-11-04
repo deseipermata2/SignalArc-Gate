@@ -183,6 +183,8 @@ try {
     payload: { authorization, signature },
   })
   for (const mode of [
+    'verification-mutate-requirements',
+    'verification-mutate-payload',
     'invalid-verification',
     'wrong-token',
     'wrong-network',
@@ -232,6 +234,7 @@ try {
     'lost settlement response is unknown with no resubmission or fabricated receipt; durable orchestration remains SG05-owned',
   )
   for (const mode of [
+    'settlement-mutate-requirements',
     'wrong-settlement-network',
     'wrong-settlement-amount',
     'settlement-missing-hash',

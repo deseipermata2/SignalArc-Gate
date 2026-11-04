@@ -140,7 +140,7 @@ export class PaymentStore {
   ) {
     const now = await clockTime(this.clock)
     let sql =
-      'UPDATE payment_attempts SET phase = ?, status = ?, failure_code = ?, updated_at = ?, operation_deadline = ? WHERE id = ? AND phase = ?'
+      "UPDATE payment_attempts SET phase = ?, status = ?, failure_code = ?, updated_at = ?, operation_deadline = ? WHERE id = ? AND phase = ? AND evidence_kind = 'local_simulation'"
     const values: (string | number | null)[] = [
       to,
       status(to),
@@ -165,6 +165,8 @@ export class PaymentStore {
     }
     if (to === 'fulfilled')
       sql += ` AND EXISTS (SELECT 1 FROM payment_receipts p WHERE p.attempt_id = payment_attempts.id AND p.evidence_kind = 'local_simulation')`
+    if (to === 'fulfilling' || to === 'fulfilled')
+      sql += ` AND NOT EXISTS (SELECT 1 FROM settlement_evidence_observations q WHERE q.attempt_id=payment_attempts.id AND q.outcome='conflict')`
     const result = await this.db
       .prepare(sql)
       .bind(...values)
@@ -186,9 +188,30 @@ export class PaymentStore {
     const rows = await this.db.batch([
       this.db
         .prepare(
-          `UPDATE payment_attempts SET phase = 'settled', status = 'settled', updated_at = ?, failure_code = NULL WHERE id = ? AND phase = ? AND authorization_key = ? AND evidence_kind = 'local_simulation' AND NOT EXISTS (SELECT 1 FROM payment_receipts WHERE attempt_id = payment_attempts.id)`,
+          `UPDATE payment_attempts SET phase = 'settled', status = 'settled', updated_at = ?, failure_code = NULL WHERE id = ? AND phase = ? AND authorization_key = ? AND authorization_fingerprint = ? AND merchant_id = ? AND resource_id = ? AND amount_atomic = ? AND lower(recipient) = lower(?) AND lower(buyer_address) = lower(?) AND lower(asset) = lower(?) AND network = ? AND config_revision = ? AND binding_generation = ? AND config_version = ? AND config_hash = ? AND snapshot_hash = ? AND request_hash = ? AND url_hash = ? AND requirements_json = ? AND evidence_kind = 'local_simulation' AND NOT EXISTS (SELECT 1 FROM payment_receipts WHERE attempt_id = payment_attempts.id) AND NOT EXISTS (SELECT 1 FROM settlement_evidence_observations q WHERE q.attempt_id = payment_attempts.id AND q.outcome = 'conflict')`,
         )
-        .bind(now, a.id, from, a.authorization_key),
+        .bind(
+          now,
+          a.id,
+          from,
+          a.authorization_key,
+          a.authorization_fingerprint,
+          a.merchant_id,
+          a.resource_id,
+          a.amount_atomic,
+          a.recipient,
+          a.buyer_address,
+          a.asset,
+          NETWORK,
+          a.config_revision,
+          a.binding_generation,
+          a.config_version,
+          a.config_hash,
+          a.snapshot_hash,
+          a.request_hash,
+          a.url_hash,
+          a.requirements_json,
+        ),
       this.db
         .prepare(
           `INSERT INTO payment_receipts (id,attempt_id,transaction_hash,network,amount_atomic,payer_address,payout_address,block_number,created_at,evidence_kind,authorization_key,config_version,config_hash,settlement_json) SELECT ?,id,?,network,amount_atomic,buyer_address,recipient,?,?,?,?,?,?,? FROM payment_attempts WHERE changes() = 1 AND id = ? AND phase = 'settled' AND NOT EXISTS (SELECT 1 FROM payment_receipts WHERE attempt_id = ?)`,
@@ -234,22 +257,22 @@ export class PaymentStore {
     const results = await this.db.batch([
       this.db
         .prepare(
-          `UPDATE payment_attempts SET phase = 'settlement_unknown', failure_code = 'settlement_interrupted', updated_at = ? WHERE phase = 'settlement_pending' AND operation_deadline < ?`,
+          `UPDATE payment_attempts SET phase = 'settlement_unknown', failure_code = 'settlement_interrupted', updated_at = ? WHERE evidence_kind='local_simulation' AND phase = 'settlement_pending' AND operation_deadline < ?`,
         )
         .bind(now, now),
       this.db
         .prepare(
-          `UPDATE payment_attempts SET phase = 'failed', status = 'failed', failure_code = 'interrupted_before_settlement', updated_at = ? WHERE phase IN ('verifying','verified') AND operation_deadline < ?`,
+          `UPDATE payment_attempts SET phase = 'failed', status = 'failed', failure_code = 'interrupted_before_settlement', updated_at = ? WHERE evidence_kind='local_simulation' AND phase IN ('verifying','verified') AND operation_deadline < ?`,
         )
         .bind(now, now),
       this.db
         .prepare(
-          `UPDATE payment_attempts SET phase = 'fulfillment_failed', failure_code = 'fulfillment_interrupted', updated_at = ? WHERE phase = 'fulfilling' AND operation_deadline < ?`,
+          `UPDATE payment_attempts SET phase = 'fulfillment_failed', failure_code = 'fulfillment_interrupted', updated_at = ? WHERE evidence_kind='local_simulation' AND phase = 'fulfilling' AND operation_deadline < ?`,
         )
         .bind(now, now),
       this.db
         .prepare(
-          `UPDATE payment_attempts SET phase = 'failed', status = 'failed', failure_code = 'challenge_expired', updated_at = ? WHERE phase = 'created' AND expires_at < ?`,
+          `UPDATE payment_attempts SET phase = 'failed', status = 'failed', failure_code = 'challenge_expired', updated_at = ? WHERE evidence_kind='local_simulation' AND phase = 'created' AND expires_at < ?`,
         )
         .bind(now, now),
     ])

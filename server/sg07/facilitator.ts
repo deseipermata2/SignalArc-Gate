@@ -27,6 +27,14 @@ interface Verified {
   required: PaymentRequirements
   payer: string
 }
+/** Bounded protocol objects must not be rewritten by an injected SDK client. */
+function freeze<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freeze(child)
+    Object.freeze(value)
+  }
+  return value
+}
 /** Integration boundary only: no client factory, credentials, routes, persistence or fulfillment. */
 export function createFacilitatorAdapter(
   client: FacilitatorClient,
@@ -51,8 +59,11 @@ export function createFacilitatorAdapter(
       )
         throw new GatewayError(503, 'facilitator_requirements_invalid')
       walletAddress(required.payTo)
-      const fixed = JSON.parse(canonical(required)) as PaymentRequirements
+      const fixed = freeze(
+        JSON.parse(canonical(required)) as PaymentRequirements,
+      )
       const parsed = await payment(header, fixed, issuedUrl)
+      freeze(parsed.payload)
       const started = await clockTime(clock)
       if (!authorizationFresh(parsed.a, started))
         throw new GatewayError(402, 'authorization_expired')

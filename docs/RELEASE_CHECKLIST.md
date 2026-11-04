@@ -130,3 +130,25 @@ See [settlement reliability evidence](SG-07_SETTLEMENT_RELIABILITY_REPORT.md). L
 ## Comprehensive current evidence at 08943d9
 
 [Current remediation report](SG-07_REMEDIATION_REPORT.md): 390 application groups and 47 Foundry tests pass; official solc 0.8.38 and byte-identical reviewed registry artifacts are reproducible. Native RPC/evidence/clock, API budget and request/receipt bounds are hardened. This does not clear dependency, production admission/orchestration/reconciliation, secure upstream architecture or operational gates. Full audit still exits 1 (5 high/12 moderate); production-only exits 1 (5 high). New 0006 is local-only until separate backup/migration/publication approval. Refer to the explicit remaining-gate table and [owner-only non-executing WSL procedure](SG-07_MANUAL_CONTRACT_DEPLOYMENT.md); do not redeploy or redo verified domain setup. Payments and real upstream access stay disabled; SG-07 stays IN PROGRESS.
+
+## Payment-first gate review at 6af7855
+
+[Current payment completion report](SG-07_PAYMENT_COMPLETION_REPORT.md) records local authorization-fingerprint/deadline/snapshot/realm/immutability hardening. Owner-reported Alchemy registry observation passes, while production per-resource admission, settlement evidence/reconciliation and safe upstream fulfillment are still blocked. Dependency audits still fail. Owner must choose an approved connection-safe arbitrary-HTTPS design or explicitly approve a narrowed fixed-service-handler pilot before that implementation can proceed. No scope was silently changed and no paid route was activated. Builder Code/grant work is deferred; SG-07 remains IN PROGRESS.
+
+## Secure internal JSON pilot — local review only
+
+[Current pilot evidence](SG-07_INTERNAL_JSON_PILOT_REPORT.md) connects a fixed owner-controlled JSON document to the isolated x402 lifecycle with no upstream HTTP/DNS request. Local manifest and paid-receipt identity checks, failure preservation and concurrency/restart tests do not admit production payments. The exact production manifest/revocation and trusted registry/settlement evidence contract require review; dependency and operational release gates remain blocked. No production schema, service binding, credentials or paid route was activated. SG-07 remains IN PROGRESS.
+
+### Internal JSON pilot admission continuation — local evidence only
+
+See [the admission continuation report](SG-07_INTERNAL_PILOT_ADMISSION_REPORT.md). Exact operator manifest, permanent revocation/revision invalidation and independent canonical USDC **fixture** checks now gate the isolated local pilot. Neither a fixed handler nor a deployed/observed registry creates production payment admission. Review the production manifest ledger/authority proposal and forward migration separately; no new application migration was added. Resolve supported SDK dependencies, genuine registry/payment evidence authority, CDP/finality/clock/recovery integration and operational approval before any single Mainnet payment. Public paid routing and arbitrary upstream remain disabled. SG-07 IN PROGRESS; launch BLOCKED.
+
+### Settlement pre-admission and journal-integrity continuation
+
+Review [the current settlement admission report](SG-07_SETTLEMENT_ADMISSION_REPORT.md). One-use local candidates now bind independently checked chain evidence to durable D1 review identity; receipts and fulfillment reject historical conflicts atomically. Migration 0008 protects existing review conflicts against INSERT OR REPLACE, with historical migration checksums unchanged. It has not been applied remotely and grants no production authority. Review its digest/order/backups before any owner-managed rollout.
+
+The narrow official CDP auth/Foundation HTTP import composition is a supported build candidate, not an installed-audit fix or live-authentication proof. Dependency remediation, trusted registry/manifest/payment admission, RPC/finality/clock policy, production consistency/operations and explicit live-test approval remain mandatory blockers. Public payments and arbitrary merchant upstream fetching remain disabled. No canonical phase status changed.
+
+### Builder Code — owner-authorized local SDK integration
+
+Project code `bc_ipzfx50y` is configured through the official x402 Schema 2 application extension; see [Builder Code integration evidence](BUILDER_CODE_INTEGRATION.md). Current official CDP documentation explicitly supports the EVM builder-code extension. Local declaration/echo validation and mock-sender calldata tests do not prove live hosted execution, code registration or attributed activity. Production payments remain disabled; real calldata and Base Dashboard evidence require the separately authorized Mainnet validation after all security gates pass. No Wagmi transaction sender, deployment or paid action was added.

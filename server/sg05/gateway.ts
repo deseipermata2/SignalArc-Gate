@@ -1,3 +1,4 @@
+import { signalArcBuilderDeclaration } from '../sg07/builder-code'
 import {
   encodePaymentRequiredHeader,
   encodePaymentResponseHeader,
@@ -63,6 +64,8 @@ export function createLocalGateway(services: LocalServices) {
         )
       )
         throw new GatewayError(503, 'settlement_record_unavailable')
+      if (upstream.validateLocalSettlement)
+        await deadline(() => upstream.validateLocalSettlement!(a, evidence))
       const value = await protectedJson(s, upstream, clock)
       const final = await unchanged(a)
       if (!(await store.advance(a.id, 'fulfilling', 'fulfilled', null, final)))
@@ -173,7 +176,13 @@ export function createLocalGateway(services: LocalServices) {
         const challenge = await server.createPaymentRequiredResponse(
           [required],
           resourceInfo(url.href),
+          undefined,
+          signalArcBuilderDeclaration(8453),
         )
+        // SDK discovery/challenge construction is asynchronous: recheck admission
+        // immediately before exposing a payable challenge.
+        if ((await eligibleSnapshot(resource)).hash !== s.hash)
+          throw new GatewayError(409, 'resource_configuration_changed')
         return reply(402, challenge, {
           'PAYMENT-REQUIRED': encodePaymentRequiredHeader(challenge),
         })
@@ -207,6 +216,7 @@ export function createLocalGateway(services: LocalServices) {
           x402Version: 2,
           resource: resourceInfo(url.href),
           accepts: [required],
+          extensions: signalArcBuilderDeclaration(8453),
         }
         return reply(402, challenge, {
           'PAYMENT-REQUIRED': encodePaymentRequiredHeader(challenge),
@@ -325,6 +335,25 @@ export function createLocalGateway(services: LocalServices) {
         ))
       )
         throw new GatewayError(409, 'resource_configuration_changed')
+      // The durable submission claim does not grant delivery permission. Recheck
+      // operator revocation after claiming and before any settlement invocation.
+      try {
+        await unchanged(active)
+        if (!authorizationFresh(signed.a, await clockTime(clock)))
+          throw new GatewayError(402, 'authorization_expired')
+      } catch (error) {
+        // No facilitator submission has started in this branch. A failed D1
+        // write leaves the claim durable for conservative unknown recovery.
+        await store
+          .advance(
+            active.id,
+            'settlement_pending',
+            'failed',
+            'pre_submission_admission_unavailable',
+          )
+          .catch(() => {})
+        throw error
+      }
       let result: SettleResponse
       try {
         result = await deadline(() =>
@@ -372,6 +401,10 @@ export function createLocalGateway(services: LocalServices) {
         )
       }
       try {
+        if (upstream.validateLocalSettlement)
+          await deadline(() =>
+            upstream.validateLocalSettlement!(active!, result),
+          )
         if (!(await store.settle(active, result, 'settlement_pending')))
           throw new Error('settlement CAS lost')
       } catch {

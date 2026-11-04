@@ -251,8 +251,13 @@ export async function onRequest({
         settleCalls = 0
       const adapter = createFacilitatorAdapter(
         {
-          verify: async (payload) => {
+          verify: async (payload, requirements) => {
             verifyCalls++
+            if (body.mode === 'verification-mutate-requirements')
+              requirements.payTo = addr
+            if (body.mode === 'verification-mutate-payload')
+              (payload.payload.authorization as Record<string, string>).to =
+                addr
             if (body.mode === 'verification-timeout')
               return new Promise(() => {})
             if (body.mode === 'verification-malformed')
@@ -300,8 +305,10 @@ export async function onRequest({
               payer: signer,
             }
           },
-          settle: async () => {
+          settle: async (_payload, requirements) => {
             settleCalls++
+            if (body.mode === 'settlement-mutate-requirements')
+              requirements.amount = '1'
             if (body.mode === 'settlement-timeout') return new Promise(() => {})
             if (body.mode === 'settlement-backward-clock') now -= 10000
             if (body.mode === 'settlement-late-clock') now += 1500

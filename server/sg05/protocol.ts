@@ -1,3 +1,5 @@
+import { builderCodeResourceServerExtension } from '@x402/extensions/builder-code'
+import { validSignalArcBuilderEcho } from '../sg07/builder-code'
 import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { PaymentPayloadSchema } from '@x402/core/schemas'
@@ -22,10 +24,9 @@ export function localProtocol(origin: string) {
   )
     throw new GatewayError(503, 'loopback_facilitator_required')
   const client = new HTTPFacilitatorClient({ url: origin, timeoutMs: 1000 })
-  const server = new x402ResourceServer(client).register(
-    NETWORK,
-    new ExactEvmScheme(),
-  )
+  const server = new x402ResourceServer(client)
+    .register(NETWORK, new ExactEvmScheme())
+    .registerExtension(builderCodeResourceServerExtension)
   return { client, server }
 }
 export function cdpCredentialGuard(origin: string) {
@@ -111,7 +112,7 @@ export async function payment(
     raw.x402Version !== 2 ||
     canonical(raw.accepted) !== canonical(required) ||
     canonical(raw.resource) !== canonical(resourceInfo(url)) ||
-    raw.extensions
+    (raw.extensions !== undefined && !validSignalArcBuilderEcho(raw.extensions))
   )
     throw new GatewayError(402, 'payment_requirements_mismatch')
   const payload = raw.payload

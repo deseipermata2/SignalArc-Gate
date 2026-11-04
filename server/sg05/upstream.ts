@@ -8,6 +8,11 @@ export type JsonTransport = (
   init: RequestInit,
 ) => Promise<Response>
 export interface UpstreamAccess {
+  /** Optional stricter local fixture evidence gate; never a production authority. */
+  validateLocalSettlement?(
+    attempt: import('./store').Attempt,
+    result: import('@x402/core/types').SettleResponse,
+  ): Promise<void>
   assertEligible(snapshot: Snapshot): void | Promise<void>
   request: JsonTransport
 }
